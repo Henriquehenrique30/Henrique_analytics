@@ -1,14 +1,15 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { PlayerStats, PlayerInfo } from "../types";
 
 export interface AIAnalysisResult { report: string; rating: number; }
 
 export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerStats): Promise<AIAnalysisResult> => {
-  // CORREÇÃO AQUI: No Vite, usamos import.meta.env e o prefixo VITE_
-  const apiKey = import.meta.env.VITE_API_KEY;
+  // A chave da API deve vir exclusivamente de process.env.API_KEY
+  const apiKey = process.env.API_KEY;
 
   if (!apiKey) {
-    console.error("ERRO CRÍTICO: API Key não encontrada. Verifique o arquivo .env ou as variáveis da Vercel.");
+    console.error("ERRO CRÍTICO: API Key não configurada em process.env.API_KEY");
     throw new Error("MISSING_API_KEY");
   }
 
@@ -21,13 +22,12 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
     - O jogador inicia com nota 6.0 (base).
     - Melhore a nota por gols, assistências, chances criadas, passes decisivos, alta precisão de passe e duelos vencidos.
     - Diminua a nota por erros críticos, baixa participação ou baixa eficiência em chances claras.
-    - A nota pode ter uma casa decimal (ex: 7.1, 8.5, 9.8, 6.0).
+    - A nota deve ter uma casa decimal (ex: 7.1, 8.5, 9.8, 6.0).
     - IMPORTANTE: Comece sua resposta EXATAMENTE com o formato "RATING: X.X" onde X.X é a nota decidida.
     
     DADOS DO JOGADOR:
     Nome: ${player.name}
     Posição: ${player.position}
-    se for um zagueiro ou jogador de defesa julgar como tal
     
     Métricas do Jogo:
     - Gols: ${stats.goals}
@@ -52,7 +52,7 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-exp', // Recomendo usar este modelo ou 'gemini-1.5-flash' se o pro-preview falhar
+      model: 'gemini-3-pro-preview',
       contents: prompt,
     });
     

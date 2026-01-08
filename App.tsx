@@ -350,6 +350,7 @@ const App: React.FC = () => {
 
   const renderAnalytics = () => {
     const playersInSelectedGame = players.filter(pl => performances.some(p => p.gameId === selectedGameId && p.playerId === pl.id));
+    const selectedGame = games.find(g => g.id === selectedGameId);
 
     return (
       <div className="space-y-6">
@@ -378,9 +379,9 @@ const App: React.FC = () => {
           <div className="flex gap-2">
              <button onClick={() => window.print()} disabled={!selectedPerformance} className="flex-grow bg-white text-slate-900 font-black py-3 rounded-2xl text-[10px] uppercase tracking-widest disabled:opacity-20 hover:bg-slate-100 transition-all">Exportar PDF</button>
              {selectedPerformance && (
-               <button onClick={() => setShowAIModal(true)} className="bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-500 transition-all">
+               <button onClick={() => setShowAIModal(true)} className="bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20">
                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                 IA
+                 Análise IA
                </button>
              )}
           </div>
@@ -388,16 +389,40 @@ const App: React.FC = () => {
 
         {selectedPerformance ? (
           <div className="space-y-6 animate-in fade-in duration-700">
+            {/* Perfil do Jogador na Análise */}
+            <div className="flex items-center gap-6 bg-slate-900/40 p-6 rounded-[2.5rem] border border-white/5 animate-in slide-in-from-top-4">
+              <div className="w-24 h-24 rounded-3xl bg-slate-800 overflow-hidden border-2 border-emerald-500/20 shadow-xl">
+                 {selectedPerformance.analysis.player.photoUrl ? (
+                   <img src={selectedPerformance.analysis.player.photoUrl} className="w-full h-full object-cover" />
+                 ) : (
+                   <div className="w-full h-full flex items-center justify-center text-slate-700">
+                     <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg>
+                   </div>
+                 )}
+              </div>
+              <div>
+                <h2 className="text-3xl font-black text-white uppercase italic tracking-tight">{selectedPerformance.analysis.player.name}</h2>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="px-3 py-1 bg-emerald-500 text-white text-[10px] font-black uppercase rounded-full tracking-widest shadow-lg shadow-emerald-500/20">{selectedPerformance.analysis.player.position}</span>
+                  <span className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">{selectedGame?.homeTeam} vs {selectedGame?.awayTeam}</span>
+                  <span className="text-slate-600 text-[10px] font-medium italic">{selectedGame?.date}</span>
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 <div className="lg:col-span-7">
-                  <div className="bg-slate-900/40 p-1 rounded-[2.5rem] border border-white/5 overflow-hidden sticky top-24">
+                  <div className="bg-slate-900/40 p-1 rounded-[2.5rem] border border-white/5 overflow-hidden sticky top-24 shadow-2xl">
                     <PitchHeatmap events={filteredEvents} intensity={15} />
                   </div>
                 </div>
 
                 <div className="lg:col-span-5 space-y-4">
                   <div className="bg-slate-900/60 p-6 rounded-[2.5rem] border border-white/5">
-                    <h4 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">Scout Detalhado</h4>
+                    <h4 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+                      Scout Detalhado
+                    </h4>
                     <div className="grid grid-cols-2 gap-3">
                       <StatCard label="Gols" value={selectedPerformance.analysis.stats.goals} icon="⚽" color="bg-emerald-500/20 text-emerald-500" isActive={metricFilter === 'goals'} onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')} />
                       <StatCard label="Assistências" value={selectedPerformance.analysis.stats.assists} icon="🎯" color="bg-blue-500/20 text-blue-500" isActive={metricFilter === 'assists'} onClick={() => setMetricFilter(metricFilter === 'assists' ? null : 'assists')} />
@@ -424,14 +449,30 @@ const App: React.FC = () => {
   const renderAIModal = () => {
     if (!selectedPerformance || !showAIModal) return null;
     return (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-md">
-        <div className="bg-slate-900 border border-white/10 w-full max-w-2xl rounded-[3rem] overflow-hidden shadow-2xl">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-950/90 backdrop-blur-md animate-in fade-in zoom-in duration-300">
+        <div className="bg-slate-900 border border-white/10 w-full max-w-3xl rounded-[3rem] overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
           <div className="p-8 border-b border-white/5 flex items-center justify-between bg-slate-800/20">
-            <h3 className="text-xl font-black text-white uppercase italic leading-none">{selectedPerformance.analysis.player.name} - Scout IA</h3>
-            <button onClick={() => setShowAIModal(false)} className="p-3 text-slate-400">Fechar</button>
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500 flex flex-col items-center justify-center text-white font-black shadow-lg shadow-emerald-500/20">
+                <span className="text-[8px] leading-none uppercase">Nota</span>
+                <span className="text-xl italic leading-none">{selectedPerformance.analysis.stats.rating.toFixed(1)}</span>
+              </div>
+              <div>
+                <h3 className="text-xl font-black text-white uppercase italic leading-none">{selectedPerformance.analysis.player.name}</h3>
+                <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mt-1">Relatório Profissional IA</p>
+              </div>
+            </div>
+            <button onClick={() => setShowAIModal(false)} className="p-3 bg-white/5 rounded-full text-slate-400 hover:text-white transition-all">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
           </div>
-          <div className="p-10 max-h-[60vh] overflow-y-auto italic">
-            {selectedPerformance.analysis.aiInsights}
+          <div className="p-10 overflow-y-auto">
+            <div className="prose prose-invert max-w-none text-slate-300 font-medium leading-relaxed whitespace-pre-line text-sm italic">
+              {selectedPerformance.analysis.aiInsights}
+            </div>
+          </div>
+          <div className="p-6 bg-slate-800/10 border-t border-white/5 text-center">
+             <button onClick={() => setShowAIModal(false)} className="px-12 py-3 bg-white text-slate-900 font-black rounded-2xl uppercase text-[10px] tracking-widest hover:bg-slate-100 transition-all shadow-xl">Fechar Relatório</button>
           </div>
         </div>
       </div>
@@ -443,20 +484,20 @@ const App: React.FC = () => {
       <div className="bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5">
         <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Novo Atleta</h3>
         <div className="space-y-4">
-          <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Nome" value={newPlayer.name} onChange={(e) => setNewPlayer(p => ({ ...p, name: e.target.value }))} />
-          <select className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" value={newPlayer.position} onChange={(e) => setNewPlayer(p => ({ ...p, position: e.target.value }))}>
+          <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Nome" value={newPlayer.name} onChange={(e) => setNewPlayer(p => ({ ...p, name: e.target.value }))} />
+          <select className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newPlayer.position} onChange={(e) => setNewPlayer(p => ({ ...p, position: e.target.value }))}>
             <option>Goleiro</option><option>Zagueiro</option><option>Lateral</option><option>Meio-Campista</option><option>Extremo</option><option>Atacante</option>
           </select>
-          <div className="flex items-center gap-6">
-            <div className="w-16 h-16 rounded-xl bg-slate-800 overflow-hidden border border-white/5">
-              {photoPreview && <img src={photoPreview} className="w-full h-full object-cover" />}
+          <div className="flex items-center gap-6 p-4 bg-slate-800/20 rounded-2xl border border-white/5">
+            <div className="w-20 h-20 rounded-xl bg-slate-800 overflow-hidden border border-white/5 flex-shrink-0">
+              {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-700 font-black text-[8px] uppercase text-center p-2">Sem Foto</div>}
             </div>
-            <label className="flex-grow bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer text-emerald-400">
-              Anexar Foto
+            <label className="flex-grow bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer text-emerald-400 hover:bg-emerald-500/20 transition-all">
+              Anexar Foto (Storage)
               <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
             </label>
           </div>
-          <button onClick={savePlayer} disabled={loading || !newPlayer.name} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-sm mt-4">
+          <button onClick={savePlayer} disabled={loading || !newPlayer.name} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-sm mt-4 shadow-xl shadow-emerald-500/10 transition-all">
             {loading ? 'Salvando...' : 'Salvar Cadastro'}
           </button>
         </div>
@@ -470,12 +511,12 @@ const App: React.FC = () => {
         <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Registrar Partida</h3>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Casa" value={newGame.homeTeam} onChange={(e) => setNewGame(g => ({ ...g, homeTeam: e.target.value }))} />
-            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Fora" value={newGame.awayTeam} onChange={(e) => setNewGame(g => ({ ...g, awayTeam: e.target.value }))} />
+            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Time Casa" value={newGame.homeTeam} onChange={(e) => setNewGame(g => ({ ...g, homeTeam: e.target.value }))} />
+            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Time Fora" value={newGame.awayTeam} onChange={(e) => setNewGame(g => ({ ...g, awayTeam: e.target.value }))} />
           </div>
-          <input type="date" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" value={newGame.date} onChange={(e) => setNewGame(g => ({ ...g, date: e.target.value }))} />
-          <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Competição" value={newGame.competition} onChange={(e) => setNewGame(g => ({ ...g, competition: e.target.value }))} />
-          <button onClick={saveGame} disabled={loading || !newGame.homeTeam} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-sm mt-4">
+          <input type="date" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newGame.date} onChange={(e) => setNewGame(g => ({ ...g, date: e.target.value }))} />
+          <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Competição" value={newGame.competition} onChange={(e) => setNewGame(g => ({ ...g, competition: e.target.value }))} />
+          <button onClick={saveGame} disabled={loading || !newGame.homeTeam} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-sm mt-4 shadow-xl shadow-emerald-500/10 transition-all">
             {loading ? 'Salvando...' : 'Criar Registro'}
           </button>
         </div>
@@ -485,29 +526,34 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-200 flex overflow-hidden font-inter">
+      {renderAIModal()}
       <aside className={`border-r border-white/5 bg-slate-900/40 w-64 flex flex-col h-screen sticky top-0 transition-all ${isSidebarOpen ? 'ml-0' : '-ml-64'}`}>
         <div className="p-7">
           <div className="flex items-center gap-3 mb-12">
-            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center"><svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" strokeWidth="2.5" /></svg></div>
+            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20"><svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" strokeWidth="2.5" /></svg></div>
             <h1 className="text-lg font-black text-white italic tracking-tighter uppercase leading-none">Scout<br/>Pro</h1>
           </div>
           <nav className="space-y-1">
-            <button onClick={() => setCurrentPage('home')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'home' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Início</button>
-            <button onClick={() => setCurrentPage('roster')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'roster' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Elenco</button>
-            <button onClick={() => setCurrentPage('analytics')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'analytics' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Análises</button>
-            <div className="pt-6 pb-2 px-4 text-[8px] font-black text-slate-600 uppercase">Registros</div>
-            <button onClick={() => setCurrentPage('player')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'player' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Atleta</button>
-            <button onClick={() => setCurrentPage('game')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'game' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Jogo</button>
+            <button onClick={() => setCurrentPage('home')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest ${currentPage === 'home' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-white/5'}`}>Início</button>
+            <button onClick={() => setCurrentPage('roster')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest ${currentPage === 'roster' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-white/5'}`}>Elenco</button>
+            <button onClick={() => setCurrentPage('analytics')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest ${currentPage === 'analytics' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-white/5'}`}>Análises</button>
+            <div className="pt-6 pb-2 px-4 text-[8px] font-black text-slate-600 uppercase tracking-widest">Registros</div>
+            <button onClick={() => setCurrentPage('player')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest ${currentPage === 'player' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-white/5'}`}>Novo Atleta</button>
+            <button onClick={() => setCurrentPage('game')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest ${currentPage === 'game' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'text-slate-400 hover:bg-white/5'}`}>Novo Jogo</button>
           </nav>
         </div>
       </aside>
 
       <div className="flex-grow flex flex-col h-screen overflow-y-auto">
-        {successMessage && <div className="fixed top-6 right-6 z-[110] bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl font-bold">✓ {successMessage}</div>}
+        {successMessage && <div className="fixed top-6 right-6 z-[110] bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl font-black text-xs uppercase tracking-widest animate-in slide-in-from-right-8 duration-500">✓ {successMessage}</div>}
         <header className="h-16 border-b border-white/5 flex items-center px-10 bg-slate-900/20 backdrop-blur-sm sticky top-0 z-40">
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-slate-800 text-slate-400 rounded-lg">
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-slate-800 text-slate-400 rounded-lg hover:text-white transition-all">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h8m-8 6h16" strokeWidth="2.5"/></svg>
           </button>
+          <div className="ml-auto flex items-center gap-4">
+             <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Cloud Sync Ativo</span>
+             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+          </div>
         </header>
         <main className="p-8 pb-20">
           {currentPage === 'home' && renderHome()}

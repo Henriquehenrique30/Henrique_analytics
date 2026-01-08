@@ -1,12 +1,12 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// No Vite, variáveis de ambiente devem começar com VITE_
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// Usando process.env para evitar erros de undefined em alguns ambientes de build
+const supabaseUrl = process.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Supabase credentials missing. Check your .env file or Vercel dashboard.");
+  console.warn("Supabase credentials missing. Check your environment variables.");
 }
 
 export const supabase = createClient(
