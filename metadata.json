@@ -1,0 +1,7 @@
+{
+  "name": "Soccer Scout Pro - Heatmap & Analytics",
+  "description": "Professional football performance analysis tool. Upload XML data to generate heatmaps and extract individual player metrics with AI-powered insights.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
