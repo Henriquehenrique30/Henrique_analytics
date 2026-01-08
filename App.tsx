@@ -68,24 +68,66 @@ const App: React.FC = () => {
     setTimeout(() => setNotification(null), 5000);
   };
 
-  if (!supabase && !isLocalMode) {
-    return (
-      <div className="min-h-screen bg-[#0b1120] flex items-center justify-center p-6 text-center">
-        <div className="max-w-md p-10 bg-slate-900 rounded-[3rem] border border-red-500/20 shadow-2xl">
-          <div className="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-red-500/20">
-             <span className="text-4xl">⚠️</span>
-          </div>
-          <h1 className="text-3xl font-black text-white uppercase italic mb-4 tracking-tighter">Conexão Pendente</h1>
-          <p className="text-slate-400 mb-8 italic leading-relaxed text-sm">As chaves do Supabase não foram detectadas. Você pode configurar as variáveis de ambiente ou continuar usando o banco de dados local do seu navegador.</p>
-          <button onClick={() => setIsLocalMode(true)} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-[0.2em] transition-all shadow-xl">Continuar Offline</button>
-        </div>
-      </div>
-    );
-  }
+  const deletePlayer = async (id: string) => {
+    if (!window.confirm("Deseja realmente excluir este jogador e todas as suas análises vinculadas?")) return;
+    
+    setLoading(true);
+    try {
+      if (supabase && !isLocalMode) {
+        // Exclui performances primeiro devido às restrições de FK se existirem
+        await supabase.from('performances').delete().eq('player_id', id);
+        const { error } = await supabase.from('players').delete().eq('id', id);
+        if (error) throw error;
+      }
+      
+      const updatedPlayers = players.filter(p => p.id !== id);
+      const updatedPerf = performances.filter(p => p.playerId !== id);
+      
+      setPlayers(updatedPlayers);
+      setPerformances(updatedPerf);
+      
+      localStorage.setItem('local_players', JSON.stringify(updatedPlayers));
+      localStorage.setItem('local_performances', JSON.stringify(updatedPerf));
+      
+      showNotification("Jogador removido com sucesso!");
+    } catch (err: any) {
+      showNotification(`Erro ao excluir: ${err.message}`, 'error');
+    }
+    setLoading(false);
+  };
+
+  const deletePerformance = async (playerId: string, gameId: string) => {
+    if (!window.confirm("Deseja excluir este scout específico?")) return;
+
+    setLoading(true);
+    try {
+      if (supabase && !isLocalMode) {
+        const { error } = await supabase.from('performances').delete().eq('player_id', playerId).eq('game_id', gameId);
+        if (error) throw error;
+      }
+
+      const updatedPerf = performances.filter(p => !(p.playerId === playerId && p.gameId === gameId));
+      setPerformances(updatedPerf);
+      localStorage.setItem('local_performances', JSON.stringify(updatedPerf));
+      
+      showNotification("Scout excluído!");
+    } catch (err: any) {
+      showNotification(`Erro ao excluir scout: ${err.message}`, 'error');
+    }
+    setLoading(false);
+  };
 
   const handlePerformanceUpload = async (e: React.ChangeEvent<HTMLInputElement>, playerId: string, gameId: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
+    // Verifica se já existe para este jogo
+    const exists = performances.some(p => p.playerId === playerId && p.gameId === gameId);
+    if (exists) {
+      showNotification("Este jogador já possui um scout para esta partida. Exclua o anterior primeiro.", "error");
+      return;
+    }
+
     setLoading(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -157,7 +199,7 @@ const App: React.FC = () => {
     setLoading(true);
     try {
       if (supabase && !isLocalMode) {
-        // Fix line 156/158 property access error by explicitly casting data from Supabase to any to safely handle property access
+        // Fix: Changed newGame.away_team to newGame.awayTeam to fix property lookup error
         const { data, error } = await supabase.from('games').insert([{ home_team: newGame.homeTeam, away_team: newGame.awayTeam, date: newGame.date, competition: newGame.competition }]).select();
         if (error) throw error;
         const result = data as any[];
@@ -199,6 +241,21 @@ const App: React.FC = () => {
       }
     });
   }, [selectedPerformance, metricFilter]);
+
+  if (!supabase && !isLocalMode) {
+    return (
+      <div className="min-h-screen bg-[#0b1120] flex items-center justify-center p-6 text-center">
+        <div className="max-w-md p-10 bg-slate-900 rounded-[3rem] border border-red-500/20 shadow-2xl">
+          <div className="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-red-500/20">
+             <span className="text-4xl">⚠️</span>
+          </div>
+          <h1 className="text-3xl font-black text-white uppercase italic mb-4 tracking-tighter">Conexão Pendente</h1>
+          <p className="text-slate-400 mb-8 italic leading-relaxed text-sm">As chaves do Supabase não foram detectadas. Você pode configurar as variáveis de ambiente ou continuar usando o banco de dados local do seu navegador.</p>
+          <button onClick={() => setIsLocalMode(true)} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-[0.2em] transition-all shadow-xl">Continuar Offline</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-200 flex overflow-hidden font-inter select-none">
@@ -279,27 +336,69 @@ const App: React.FC = () => {
 
           {currentPage === 'roster' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {players.map(p => (
-                <div key={p.id} className="bg-slate-900/60 p-5 rounded-[2rem] border border-white/5 hover:border-emerald-500/30 transition-all">
-                  <div className="flex items-center gap-4 mb-5">
-                    <div className="w-12 h-12 rounded-xl bg-slate-800 overflow-hidden border border-white/5">
-                      {p.photoUrl ? <img src={p.photoUrl} className="w-full h-full object-cover" alt={p.name} /> : <div className="w-full h-full flex items-center justify-center text-slate-700">👤</div>}
+              {players.map(p => {
+                const selectedGameIdForPlayer = rosterGameSelection[p.id];
+                const existingPerf = selectedGameIdForPlayer 
+                  ? performances.find(perf => perf.playerId === p.id && perf.gameId === selectedGameIdForPlayer)
+                  : null;
+
+                return (
+                  <div key={p.id} className="bg-slate-900/60 p-5 rounded-[2rem] border border-white/5 hover:border-emerald-500/30 transition-all flex flex-col relative group">
+                    <button 
+                      onClick={() => deletePlayer(p.id)}
+                      className="absolute top-4 right-4 p-2 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all z-10"
+                      title="Excluir Jogador"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    </button>
+
+                    <div className="flex items-center gap-4 mb-5">
+                      <div className="w-12 h-12 rounded-xl bg-slate-800 overflow-hidden border border-white/5">
+                        {p.photoUrl ? <img src={p.photoUrl} className="w-full h-full object-cover" alt={p.name} /> : <div className="w-full h-full flex items-center justify-center text-slate-700">👤</div>}
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-white uppercase truncate max-w-[100px]">{p.name}</h4>
+                        <p className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">{p.position}</p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-sm font-black text-white uppercase truncate max-w-[120px]">{p.name}</h4>
-                      <p className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">{p.position}</p>
+
+                    <select 
+                      onChange={e => setRosterGameSelection({...rosterGameSelection, [p.id]: e.target.value})} 
+                      className="w-full bg-slate-800/50 border border-white/5 rounded-xl px-4 py-3 text-[10px] font-bold text-slate-300 mb-3 outline-none"
+                    >
+                      <option value="">Selecione Jogo...</option>
+                      {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam}</option>)}
+                    </select>
+
+                    <div className="flex-grow flex flex-col justify-end">
+                      {existingPerf ? (
+                        <div className="space-y-2">
+                          <div className="bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 rounded-xl text-center">
+                            <p className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">Scout Carregado ✓</p>
+                          </div>
+                          <button 
+                            onClick={() => deletePerformance(p.id, selectedGameIdForPlayer)}
+                            className="w-full py-2.5 rounded-xl text-[8px] font-black uppercase tracking-widest bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
+                          >
+                            Excluir Scout
+                          </button>
+                        </div>
+                      ) : (
+                        <label className={`block w-full text-center py-3 rounded-xl text-[8px] font-black uppercase tracking-widest cursor-pointer transition-all border-2 border-dashed ${selectedGameIdForPlayer ? 'border-emerald-500/30 text-emerald-500' : 'border-slate-800 text-slate-700 opacity-40'}`}>
+                          {loading ? 'Processando...' : 'Carregar Scout'}
+                          <input 
+                            type="file" 
+                            accept=".json" 
+                            className="hidden" 
+                            disabled={!selectedGameIdForPlayer || loading} 
+                            onChange={e => handlePerformanceUpload(e, p.id, selectedGameIdForPlayer)} 
+                          />
+                        </label>
+                      )}
                     </div>
                   </div>
-                  <select onChange={e => setRosterGameSelection({...rosterGameSelection, [p.id]: e.target.value})} className="w-full bg-slate-800/50 border border-white/5 rounded-xl px-4 py-3 text-[10px] font-bold text-slate-300 mb-3 outline-none">
-                    <option value="">Selecione Jogo...</option>
-                    {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam}</option>)}
-                  </select>
-                  <label className={`block w-full text-center py-3 rounded-xl text-[8px] font-black uppercase tracking-widest cursor-pointer transition-all border-2 border-dashed ${rosterGameSelection[p.id] ? 'border-emerald-500/30 text-emerald-500' : 'border-slate-800 text-slate-700 opacity-40'}`}>
-                    {loading ? 'Processando...' : 'Carregar Scout'}
-                    <input type="file" accept=".json" className="hidden" disabled={!rosterGameSelection[p.id] || loading} onChange={e => handlePerformanceUpload(e, p.id, rosterGameSelection[p.id])} />
-                  </label>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -376,7 +475,6 @@ const App: React.FC = () => {
                       <StatCard label="Duelos Ganhos" value={selectedPerformance.analysis.stats.duelsWon} suffix={`de ${selectedPerformance.analysis.stats.duels}`} icon="⚔️" color="bg-indigo-500/20 text-indigo-500" isActive={metricFilter === 'duels'} onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')} />
                       <StatCard label="Desarmes" value={selectedPerformance.analysis.stats.tackles} icon="🚫" color="bg-red-500/20 text-red-500" isActive={metricFilter === 'tackles'} onClick={() => setMetricFilter(metricFilter === 'tackles' ? null : 'tackles')} />
                       <StatCard label="Interceptações" value={selectedPerformance.analysis.stats.interceptions} icon="🛡️" color="bg-purple-500/20 text-purple-500" isActive={metricFilter === 'interceptions'} onClick={() => setMetricFilter(metricFilter === 'interceptions' ? null : 'interceptions')} />
-                      {/* Rating Médio no Grid para completar visual */}
                       <div className="bg-slate-900/40 p-5 rounded-[1.5rem] border border-white/5 flex flex-col items-center justify-center text-center opacity-60">
                         <span className="text-[8px] font-black text-slate-600 uppercase mb-1">Impacto Geral</span>
                         <div className="text-xl font-black text-white italic">PRO SCOUT</div>
