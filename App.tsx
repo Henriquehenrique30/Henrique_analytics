@@ -33,6 +33,11 @@ const App: React.FC = () => {
   const [newGame, setNewGame] = useState({ homeTeam: '', awayTeam: '', date: '', competition: '' });
 
   const fetchData = async () => {
+    if (!supabase) {
+      setDataLoading(false);
+      return;
+    }
+
     setDataLoading(true);
     try {
       const { data: pData, error: pError } = await supabase.from('players').select('*').order('name');
@@ -65,6 +70,21 @@ const App: React.FC = () => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 5000);
   };
+
+  if (!supabase) {
+    return (
+      <div className="min-h-screen bg-[#0b1120] flex items-center justify-center p-6 text-center">
+        <div className="max-w-md p-10 bg-slate-900 rounded-[3rem] border border-red-500/20 shadow-2xl">
+          <div className="text-5xl mb-6">⚠️</div>
+          <h1 className="text-2xl font-black text-white uppercase italic mb-4">Conexão Pendente</h1>
+          <p className="text-slate-400 mb-8 italic">As chaves de configuração do banco de dados (Supabase) não foram encontradas. Verifique as configurações de ambiente do projeto.</p>
+          <div className="text-[10px] font-mono bg-black/40 p-4 rounded-xl text-red-400 break-all">
+            MISSING: VITE_SUPABASE_URL / ANON_KEY
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handlePerformanceUpload = async (e: React.ChangeEvent<HTMLInputElement>, playerId: string, gameId: string) => {
     const file = e.target.files?.[0];
@@ -242,7 +262,7 @@ const App: React.FC = () => {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h8m-8 6h16" strokeWidth="2.5"/></svg>
           </button>
           <div className="ml-auto flex items-center gap-4">
-             <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Status do Banco de Dados</span>
+             <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Database Sync</span>
              <div className={`w-2 h-2 rounded-full animate-pulse ${dataLoading ? 'bg-yellow-500' : 'bg-emerald-500'}`}></div>
           </div>
         </header>
@@ -279,7 +299,7 @@ const App: React.FC = () => {
                   </label>
                 </div>
                 <button onClick={savePlayer} disabled={loading || !newPlayer.name} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase text-xs tracking-widest mt-4 shadow-xl transition-all">
-                  {loading ? 'Sincronizando Banco...' : 'Finalizar Cadastro'}
+                  {loading ? 'Salvando...' : 'Finalizar Cadastro'}
                 </button>
               </div>
             </div>
@@ -325,7 +345,7 @@ const App: React.FC = () => {
                       {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} vs {g.awayTeam} ({g.date})</option>)}
                     </select>
                     <label className={`block w-full text-center py-3 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer transition-all border-2 border-dashed ${rosterGameSelection[p.id] ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500' : 'border-slate-800 text-slate-600 opacity-50'}`}>
-                      {loading ? 'Sincronizando...' : 'Vincular Scout JSON'}
+                      {loading ? 'Processando...' : 'Vincular Scout JSON'}
                       <input 
                         type="file" 
                         accept=".json" 
@@ -359,7 +379,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="flex gap-2 lg:col-span-2">
                    <button onClick={() => setShowAIModal(true)} disabled={!selectedPerformance} className="flex-grow bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-20">Relatório de IA</button>
-                   <button onClick={() => window.print()} disabled={!selectedPerformance} className="bg-white text-slate-900 font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all shadow-xl disabled:opacity-20">Imprimir PDF</button>
+                   <button onClick={() => window.print()} disabled={!selectedPerformance} className="bg-white text-slate-900 font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all shadow-xl disabled:opacity-20">PDF</button>
                 </div>
               </div>
 
@@ -381,9 +401,6 @@ const App: React.FC = () => {
                       <div className="flex items-center justify-center md:justify-start gap-3">
                         <span className="px-4 py-1.5 bg-emerald-500 text-white text-[11px] font-black uppercase rounded-xl tracking-widest shadow-xl shadow-emerald-500/20">
                           {selectedPerformance.analysis.player.position}
-                        </span>
-                        <span className="text-slate-500 text-[10px] font-black uppercase tracking-widest bg-white/5 px-3 py-1.5 rounded-lg border border-white/5">
-                          {games.find(g => g.id === selectedGameId)?.competition}
                         </span>
                       </div>
                     </div>
@@ -411,7 +428,7 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <div className="py-32 text-center bg-slate-900/40 rounded-[3rem] border-2 border-dashed border-slate-800">
-                  <p className="text-slate-500 font-medium italic">Dados indisponíveis. Selecione filtros válidos.</p>
+                  <p className="text-slate-500 font-medium italic">Selecione uma partida e um atleta para carregar os dados.</p>
                 </div>
               )}
             </div>
@@ -437,13 +454,11 @@ const App: React.FC = () => {
                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
             </div>
-            <div className="p-12 overflow-y-auto bg-gradient-to-b from-slate-900 to-slate-950">
-              <div className="prose prose-invert max-w-none text-slate-300 font-medium leading-relaxed whitespace-pre-line text-lg italic">
-                {selectedPerformance.analysis.aiInsights}
-              </div>
+            <div className="p-12 overflow-y-auto bg-gradient-to-b from-slate-900 to-slate-950 text-slate-300 italic whitespace-pre-line">
+              {selectedPerformance.analysis.aiInsights}
             </div>
             <div className="p-8 border-t border-white/5 bg-slate-800/10 text-center">
-               <button onClick={() => setShowAIModal(false)} className="px-16 py-4 bg-white text-slate-900 font-black rounded-2xl uppercase text-[10px] tracking-[0.3em] hover:bg-slate-100 transition-all shadow-xl active:scale-95">Fechar Relatório</button>
+               <button onClick={() => setShowAIModal(false)} className="px-16 py-4 bg-white text-slate-900 font-black rounded-2xl uppercase text-[10px] tracking-widest hover:bg-slate-100 transition-all shadow-xl active:scale-95">Fechar Relatório</button>
             </div>
           </div>
         </div>

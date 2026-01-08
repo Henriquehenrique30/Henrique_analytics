@@ -1,12 +1,19 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// No ambiente de execução, process.env é a fonte primária de chaves
 const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error("ERRO DE CONFIGURAÇÃO: VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY não definidos em process.env.");
+let supabaseInstance: any = null;
+
+if (supabaseUrl && supabaseAnonKey && supabaseUrl !== '' && supabaseAnonKey !== '') {
+  try {
+    supabaseInstance = createClient(supabaseUrl, supabaseAnonKey);
+  } catch (e) {
+    console.error("Erro crítico ao inicializar Supabase:", e);
+  }
+} else {
+  console.error("ERRO DE CONFIGURAÇÃO: VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY não definidos.");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = supabaseInstance;
