@@ -23,6 +23,9 @@ export interface PlayerStats {
   keyPasses: number;
   chances: number;
   chancesCreated: number;
+  errors: number;
+  dribbles: number;
+  dribblesWon: number;
   rating: number;
 }
 

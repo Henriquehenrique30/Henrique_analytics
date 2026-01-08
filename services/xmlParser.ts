@@ -90,6 +90,10 @@ export const parseFootballXML = (xmlString: string): ParseResult => {
   let keyPasses = 0;
   let chances = 0;
   let chancesCreated = 0;
+  // Counters for missing PlayerStats properties
+  let errorsCount = 0;
+  let dribblesTotal = 0;
+  let dribblesWonCount = 0;
 
   temporalGroups.forEach((data, timestamp) => {
     const { actions, success, x, y } = data;
@@ -118,9 +122,19 @@ export const parseFootballXML = (xmlString: string): ParseResult => {
       if (hasTag(["goal"])) goals++;
     }
 
-    if (hasTag(["duel", "challenge", "dribble"])) {
+    if (hasTag(["duel", "challenge"])) {
       duelsTotal++;
       if (success) duelsWon++;
+    }
+
+    // Capture missing metrics: Dribbles and Errors
+    if (hasTag(["dribble", "drible", "take on"])) {
+      dribblesTotal++;
+      if (success) dribblesWonCount++;
+    }
+
+    if (hasTag(["mistake", "error", "lost", "perda"])) {
+      errorsCount++;
     }
 
     if (hasTag(["assist"])) assists++;
@@ -146,7 +160,11 @@ export const parseFootballXML = (xmlString: string): ParseResult => {
     keyPasses,
     chances,
     chancesCreated,
-    rating: 6.0
+    // Fix for line 134: Add missing properties from PlayerStats interface
+    errors: errorsCount,
+    dribbles: dribblesTotal,
+    dribblesWon: dribblesWonCount,
+    rating: 5.0
   };
 
   return { events, stats, detectedPlayerName };

@@ -1,20 +1,7 @@
+
 import { FootballEvent, PlayerStats, ParseResult } from '../types';
 
-interface JSONLabel {
-  group: string;
-  text: string;
-}
-
-interface JSONInstance {
-  id: string;
-  code: string;
-  start: string;
-  end: string;
-  label: JSONLabel[];
-}
-
 export const parseFootballJSON = (jsonData: any): ParseResult => {
-  // Inicializa estatísticas zeradas
   const emptyStats: PlayerStats = {
     passes: 0,
     passesAccurate: 0,
@@ -30,6 +17,9 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
     keyPasses: 0,
     chances: 0,
     chancesCreated: 0,
+    errors: 0,
+    dribbles: 0,
+    dribblesWon: 0,
     rating: 6.0
   };
 
@@ -47,14 +37,14 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
   let assists = 0;
   let keyPasses = 0;
   let chancesCreated = 0;
+  let errorsCount = 0;
+  let dribblesTotal = 0;
+  let dribblesWonCount = 0;
 
-  // Função auxiliar para determinar sucesso usando as flags do seu arquivo (isSuccess/isFailure)
   const determineSuccess = (event: any, actionName: string): boolean => {
-    // 1. Prioridade absoluta: O que o arquivo diz explicitamente
     if (typeof event.isFailure === 'boolean' && event.isFailure) return false;
     if (typeof event.isSuccess === 'boolean' && event.isSuccess) return true;
     
-    // 2. Fallback: Análise de texto (apenas se o arquivo não tiver as flags)
     const lower = actionName.toLowerCase();
     const isFailureText = lower.includes("inaccurate") || 
                           lower.includes("unsuccessful") || 
@@ -72,12 +62,10 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
            lower.includes("successful");
   };
 
-  // Processa cada evento individualmente
   const processEventItem = (actionName: string, x: number, y: number, time: string, rawEvent: any) => {
     const isSuccessful = determineSuccess(rawEvent, actionName);
     const lowerAction = actionName.toLowerCase();
 
-    // Normalização de coordenadas
     const normX = x > 100 ? (x / 105) * 100 : x;
     const normY = y > 100 ? (y / 68) * 100 : y;
 
@@ -89,49 +77,44 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
       timestamp: time
     });
 
-    // --- Mapeamento de Estatísticas ---
     const matches = (keywords: string[]) => keywords.some(k => lowerAction.includes(k));
 
+    // Erros
+    if (matches(["mistake", "error", "lost ball", "perda de posse"])) {
+      errorsCount++;
+    }
+
+    // Dribles
+    if (matches(["dribble", "drible", "take on"])) {
+      dribblesTotal++;
+      if (isSuccessful) dribblesWonCount++;
+    }
+
     // Passes
-    // Usa a flag isPass do arquivo se existir
     const isPass = typeof rawEvent.isPass === 'boolean' ? rawEvent.isPass : matches(["pass", "cross", "long ball"]);
     if (isPass) {
       passesTotal++;
       if (isSuccessful) passesAccurateCount++;
     }
 
-    // Finalizações e Gols
-    // Usa a flag isShot do arquivo se existir
+    // Finalizações
     const isShot = typeof rawEvent.isShot === 'boolean' ? rawEvent.isShot : matches(["shot", "goal"]);
-    
     if (isShot || matches(["shot", "goal"])) {
-      // Se for "Goal mistakes" (falha), não conta como chute a gol, apenas erro
       if (!lowerAction.includes("mistake") || lowerAction.includes("goal")) {
          shotsTotal++;
       }
-      
       if (isSuccessful || lowerAction.includes("target")) shotsOnTarget++;
-
-      // CORREÇÃO DEFINITIVA DO GOL:
-      // Só conta gol se: 
-      // 1. Tem "goal" no nome 
-      // 2. O arquivo diz que foi SUCESSO (isSuccess=true / isFailure=false)
-      // 3. Não é gol contra ou tiro de meta
-      if (lowerAction.includes("goal") && 
-          isSuccessful && 
-          !lowerAction.includes("own goal") && 
-          !lowerAction.includes("goal kick")) {
+      if (lowerAction.includes("goal") && isSuccessful && !lowerAction.includes("own goal") && !lowerAction.includes("goal kick")) {
         goals++;
       }
     }
 
     // Duelos
-    if (matches(["duel", "challenge", "dribble"])) {
+    if (matches(["duel", "challenge"])) {
       duelsTotal++;
       if (isSuccessful) duelsWon++;
     }
 
-    // Outras métricas
     if (lowerAction.includes("assist")) assists++;
     if (lowerAction.includes("key pass") || lowerAction.includes("decisivo")) keyPasses++;
     if (lowerAction.includes("tackle") || lowerAction.includes("desarme")) tackles++;
@@ -139,64 +122,56 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
     if (lowerAction.includes("chance created")) chancesCreated++;
   };
 
-  // --- Detecção de Formato ---
-
-  // CASO 1: Formato Wyscout Raw (Array direto)
   if (Array.isArray(jsonData)) {
-    jsonData.forEach((instance: JSONInstance) => {
+    jsonData.forEach((instance: any) => {
       const code = (instance.code || "").toLowerCase();
       if (code.includes("start") || code.includes("end") || code.includes("half")) return;
-
-      let x = 50, y = 50;
-      let actionName = instance.code;
-
-      instance.label.forEach(l => {
-        if (l.group === "pos_x" && l.text !== "None") x = parseFloat(l.text);
-        if (l.group === "pos_y" && l.text !== "None") y = parseFloat(l.text);
-        if (l.group === "Action") actionName = l.text;
-      });
-
+      let x = 50, y = 50, actionName = instance.code;
+      if (instance.label) {
+        instance.label.forEach((l: any) => {
+          if (l.group === "pos_x" && l.text !== "None") x = parseFloat(l.text);
+          if (l.group === "pos_y" && l.text !== "None") y = parseFloat(l.text);
+          if (l.group === "Action") actionName = l.text;
+        });
+      }
       processEventItem(actionName, x, y, instance.start, instance);
     });
-  } 
-  // CASO 2: Seu Formato JSON (Objeto com array 'events')
-  else if (jsonData && jsonData.events && Array.isArray(jsonData.events)) {
+  } else if (jsonData && jsonData.events && Array.isArray(jsonData.events)) {
     jsonData.events.forEach((event: any) => {
       const actionName = event.type || "";
       let x = 50, y = 50;
-
       if (event.tags && Array.isArray(event.tags) && event.tags.length >= 5) {
         const parsedX = parseFloat(event.tags[3]);
         const parsedY = parseFloat(event.tags[4]);
         if (!isNaN(parsedX)) x = parsedX;
         if (!isNaN(parsedY)) y = parsedY;
       }
-
       const time = event.start ? event.start.toString() : "0";
-      // Passamos o objeto 'event' completo para verificar as flags isFailure/isSuccess
       processEventItem(actionName, x, y, time, event);
     });
-  } else {
-    return { events: [], stats: emptyStats };
   }
 
-  const stats: PlayerStats = {
-    passes: passesTotal,
-    passesAccurate: passesAccurateCount,
-    passAccuracy: passesTotal > 0 ? (passesAccurateCount / passesTotal) * 100 : 0,
-    shots: shotsTotal,
-    shotsOnTarget,
-    duels: duelsTotal,
-    duelsWon,
-    interceptions,
-    tackles,
-    goals,
-    assists,
-    keyPasses,
-    chances: goals + shotsTotal,
-    chancesCreated,
-    rating: 6.0 
+  return {
+    events,
+    stats: {
+      ...emptyStats,
+      passes: passesTotal,
+      passesAccurate: passesAccurateCount,
+      passAccuracy: passesTotal > 0 ? (passesAccurateCount / passesTotal) * 100 : 0,
+      shots: shotsTotal,
+      shotsOnTarget,
+      duels: duelsTotal,
+      duelsWon,
+      interceptions,
+      tackles,
+      goals,
+      assists,
+      keyPasses,
+      chances: goals + shotsTotal,
+      chancesCreated,
+      errors: errorsCount,
+      dribbles: dribblesTotal,
+      dribblesWon: dribblesWonCount
+    }
   };
-
-  return { events, stats };
 };

@@ -57,7 +57,7 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
     });
     
     const text = response.text || "";
-    let rating = 6.0;
+    let rating = 5.0;
     
     const ratingMatch = text.match(/RATING:\s*(\d+\.?\d*)/i);
     if (ratingMatch && ratingMatch[1]) {
