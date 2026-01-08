@@ -8,7 +8,15 @@ export interface AIAnalysisResult {
 }
 
 export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerStats): Promise<AIAnalysisResult> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Ensure we get the latest key from process.env.API_KEY
+  // We use a getter or re-initialize to avoid stale references
+  const apiKey = typeof process !== 'undefined' ? process.env.API_KEY : (window as any).process?.env?.API_KEY;
+
+  if (!apiKey) {
+    throw new Error("MISSING_API_KEY");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   
   const prompt = `
     Analise os dados de desempenho do seguinte jogador de futebol e gere um relatório de scout profissional e uma nota (rating) de 4.0 a 10.0.
@@ -47,7 +55,7 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3-pro-preview',
       contents: prompt,
     });
     
@@ -65,11 +73,9 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
       report: report || "Não foi possível gerar a análise detalhada.",
       rating: rating
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error("AI Error:", error);
-    return {
-      report: "Erro ao processar análise inteligente.",
-      rating: 6.0
-    };
+    // Propagate the error to be handled by the UI
+    throw error;
   }
 };

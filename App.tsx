@@ -10,10 +10,26 @@ import StatCard from './components/StatCard';
 type Page = 'home' | 'player' | 'game' | 'roster' | 'analytics';
 type MetricFilter = 'goals' | 'assists' | 'keyPasses' | 'shots' | 'passes' | 'duels' | 'interceptions' | 'tackles' | null;
 
+// Extend Window interface for AI Studio helpers
+declare global {
+  interface Window {
+    aistudio: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+    process: {
+      env: {
+        API_KEY?: string;
+      };
+    };
+  }
+}
+
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showAIModal, setShowAIModal] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
   
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [games, setGames] = useState<RegisteredGame[]>([]);
@@ -22,6 +38,36 @@ const App: React.FC = () => {
   
   const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  // Check for API Key at startup
+  useEffect(() => {
+    const checkKey = async () => {
+      // In some environments process.env.API_KEY is pre-configured
+      const preConfigured = !!(typeof process !== 'undefined' && process.env.API_KEY);
+      if (preConfigured) {
+        setHasApiKey(true);
+        return;
+      }
+
+      // Otherwise check if aistudio selector was used
+      if (window.aistudio) {
+        const selected = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(selected);
+      } else {
+        // Fallback for non-aistudio environments
+        setHasApiKey(false);
+      }
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      // Assume success after triggering the dialog to avoid race conditions
+      setHasApiKey(true);
+    }
+  };
 
   const fetchData = async () => {
     setDataLoading(true);
@@ -34,7 +80,6 @@ const App: React.FC = () => {
       if (gData) setGames(gData.map((g: any) => ({ 
         id: g.id, homeTeam: g.home_team, awayTeam: g.away_team, date: g.date, competition: g.competition 
       })));
-      // Map Supabase snake_case columns to camelCase types
       if (perfData) setPerformances(perfData.map((p: any) => ({
         id: p.id,
         playerId: p.player_id,
@@ -104,7 +149,23 @@ const App: React.FC = () => {
         const player = players.find(p => p.id === playerId);
         if (!player) throw new Error("Atleta não encontrado no sistema.");
 
-        const aiResult = await generateScoutingReport(player, parsedStats);
+        let aiResult;
+        try {
+          aiResult = await generateScoutingReport(player, parsedStats);
+        } catch (aiErr: any) {
+          if (aiErr.message?.includes("Requested entity was not found")) {
+            showNotification("API Key expirada ou inválida. Selecione novamente.");
+            setHasApiKey(false);
+            return;
+          }
+          if (aiErr.message === "MISSING_API_KEY") {
+            showNotification("Configuração de API necessária.");
+            setHasApiKey(false);
+            return;
+          }
+          throw aiErr;
+        }
+
         const finalStats = { ...parsedStats, rating: aiResult.rating };
         
         const analysisData = {
@@ -127,7 +188,6 @@ const App: React.FC = () => {
           throw new Error(`Erro no Banco: ${error.message}`);
         }
 
-        // Map Supabase response back to camelCase local state
         setPerformances(prev => [
           ...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), 
           {
@@ -240,7 +300,6 @@ const App: React.FC = () => {
       const { error } = await supabase.from('players').delete().eq('id', id);
       if (!error) {
         setPlayers(prev => prev.filter(p => p.id !== id));
-        // Fix: Use camelCase property name
         setPerformances(prev => prev.filter(perf => perf.playerId !== id));
         showNotification("Atleta removido.");
       } else {
@@ -254,7 +313,6 @@ const App: React.FC = () => {
       const { error } = await supabase.from('games').delete().eq('id', id);
       if (!error) {
         setGames(prev => prev.filter(g => g.id !== id));
-        // Fix: Use camelCase property name
         setPerformances(prev => prev.filter(perf => perf.gameId !== id));
         showNotification("Partida removida.");
       } else {
@@ -264,7 +322,6 @@ const App: React.FC = () => {
   };
 
   const selectedPerformance = useMemo(() => 
-    // Fix: Use camelCase property names
     performances.find(p => p.gameId === selectedGameId && p.playerId === selectedPlayerId),
     [performances, selectedGameId, selectedPlayerId]
   );
@@ -288,6 +345,36 @@ const App: React.FC = () => {
       }
     });
   }, [selectedPerformance, metricFilter]);
+
+  const renderApiKeySelector = () => (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-[#0b1120] p-6">
+      <div className="bg-slate-900 border border-white/5 p-12 rounded-[3rem] max-w-md w-full text-center shadow-2xl">
+        <div className="w-20 h-20 bg-emerald-500/10 rounded-3xl flex items-center justify-center mx-auto mb-8 text-emerald-500 border border-emerald-500/20">
+          <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </div>
+        <h2 className="text-2xl font-black text-white mb-4 uppercase italic">Configuração de IA</h2>
+        <p className="text-slate-400 mb-8 text-sm font-medium leading-relaxed">
+          Para utilizar as análises inteligentes de desempenho, é necessário configurar uma chave de API válida.
+        </p>
+        <div className="space-y-4">
+          <button 
+            onClick={handleSelectKey}
+            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs transition-all shadow-lg shadow-emerald-600/20"
+          >
+            Selecionar API Key
+          </button>
+          <a 
+            href="https://ai.google.dev/gemini-api/docs/billing" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="block text-[10px] font-black text-slate-500 hover:text-white uppercase tracking-widest transition-colors"
+          >
+            Saiba mais sobre faturamento e cotas
+          </a>
+        </div>
+      </div>
+    </div>
+  );
 
   const renderHome = () => (
     <div className="h-[70vh] flex items-center justify-center">
@@ -321,7 +408,6 @@ const App: React.FC = () => {
           <div className="col-span-full py-20 text-center text-slate-500 italic">Nenhum atleta cadastrado.</div>
         ) : players.map(player => {
           const playerGameId = rosterGameSelection[player.id] || "";
-          // Fix: Use camelCase property names
           const hasPerformance = performances.some(p => p.playerId === player.id && p.gameId === playerGameId);
 
           return (
@@ -377,7 +463,6 @@ const App: React.FC = () => {
 
   const renderAnalytics = () => {
     const sortedGames = [...games];
-    // Fix: Use camelCase property names in performance filter
     const playersInSelectedGame = players.filter(pl => performances.some(p => p.gameId === selectedGameId && p.playerId === pl.id));
 
     return (
@@ -565,6 +650,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-200 flex overflow-hidden font-inter">
+      {hasApiKey === false && renderApiKeySelector()}
       {renderAIModal()}
       <aside className={`border-r border-white/5 bg-slate-900/40 backdrop-blur-md flex flex-col sticky top-0 h-screen transition-all duration-300 ${isSidebarOpen ? 'w-64' : 'w-0 overflow-hidden'}`}>
         <div className="p-7 w-64">
@@ -592,6 +678,11 @@ const App: React.FC = () => {
           <div className="ml-auto text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
             Sistema Ativo
+            {hasApiKey === false && (
+              <button onClick={handleSelectKey} className="ml-4 px-3 py-1 bg-red-500/10 text-red-500 rounded-full border border-red-500/20 text-[8px] hover:bg-red-500/20 transition-all">
+                Configurar API
+              </button>
+            )}
           </div>
         </header>
         <main className="p-8 pb-20">
