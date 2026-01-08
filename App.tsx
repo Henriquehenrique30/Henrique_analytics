@@ -48,7 +48,14 @@ const App: React.FC = () => {
       const { data: gData } = await supabase.from('games').select('*');
       const { data: perfData } = await supabase.from('performances').select('*');
       
-      if (pData) setPlayers(pData);
+      if (pData) {
+        // Mapear photo_url do banco para photoUrl do frontend, se necessário
+        const mappedPlayers = pData.map((p: any) => ({
+          ...p,
+          photoUrl: p.photo_url || p.photoUrl // Garante compatibilidade
+        }));
+        setPlayers(mappedPlayers);
+      }
       if (gData) setGames(gData);
       if (perfData) setPerformances(perfData);
     } catch (err) {
@@ -101,16 +108,22 @@ const App: React.FC = () => {
     if (!newPlayer.name) return;
     setLoading(true);
     try {
+      // CORREÇÃO: Usando 'photo_url' para corresponder à coluna do Supabase
       const { data, error } = await supabase.from('players').insert({
         name: newPlayer.name,
-        photoUrl: newPlayer.photoUrl,
+        photo_url: newPlayer.photoUrl, 
         position: newPlayer.position
       }).select().single();
       
       if (error) throw error;
       
       if (data) {
-        setPlayers(prev => [...prev, data]);
+        // Mapeia o retorno do banco para o formato local
+        const savedPlayer = {
+            ...data,
+            photoUrl: data.photo_url
+        };
+        setPlayers(prev => [...prev, savedPlayer]);
         setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
         showNotification("Jogador salvo no banco de dados!");
       }
@@ -193,7 +206,6 @@ const App: React.FC = () => {
     </div>
   );
 
-  // --- NOVA FUNÇÃO QUE FALTAVA ---
   const renderRegisterGame = () => (
     <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4">
       <div className="bg-slate-900/60 p-10 rounded-[3rem] border border-white/5 backdrop-blur-xl">
