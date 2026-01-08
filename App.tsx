@@ -242,7 +242,7 @@ const App: React.FC = () => {
                 </select>
                 <div className="flex items-center gap-4 p-4 bg-slate-800/20 rounded-2xl border border-white/5">
                   <div className="w-16 h-16 rounded-xl bg-slate-800 overflow-hidden border border-white/5 flex-shrink-0">
-                    {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-700 font-black text-[8px] uppercase text-center p-2">Sem Foto</div>}
+                    {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" alt="Preview" /> : <div className="w-full h-full flex items-center justify-center text-slate-700 font-black text-[8px] uppercase text-center p-2">Sem Foto</div>}
                   </div>
                   <label className="flex-grow bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer text-emerald-400 hover:bg-emerald-500/20 transition-all">
                     Upload Foto
@@ -282,7 +282,7 @@ const App: React.FC = () => {
                 <div key={p.id} className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl group hover:border-emerald-500/30 transition-all flex flex-col relative">
                   <div className="flex items-center gap-5 mb-6">
                     <div className="w-16 h-16 rounded-2xl bg-slate-800 overflow-hidden border border-white/5 flex-shrink-0">
-                      {p.photoUrl ? <img src={p.photoUrl} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-700">👤</div>}
+                      {p.photoUrl ? <img src={p.photoUrl} className="w-full h-full object-cover" alt={p.name} /> : <div className="w-full h-full flex items-center justify-center text-slate-700">👤</div>}
                     </div>
                     <div>
                       <h4 className="text-lg font-black text-white uppercase">{p.name}</h4>
@@ -343,7 +343,7 @@ const App: React.FC = () => {
                     <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/5 to-transparent opacity-50"></div>
                     <div className="w-32 h-32 rounded-[2rem] bg-slate-800 overflow-hidden border-4 border-emerald-500/10 shadow-2xl relative z-10">
                       {selectedPerformance.analysis.player.photoUrl ? (
-                        <img src={selectedPerformance.analysis.player.photoUrl} className="w-full h-full object-cover" />
+                        <img src={selectedPerformance.analysis.player.photoUrl} className="w-full h-full object-cover" alt={selectedPerformance.analysis.player.name} />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-700 text-4xl">👤</div>
                       )}
@@ -390,8 +390,8 @@ const App: React.FC = () => {
               )}
             </div>
           )}
-        </div>
-      </main>
+        </main>
+      </div>
 
       {showAIModal && selectedPerformance && (
         <div className="fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-xl flex items-center justify-center p-8 animate-in fade-in zoom-in duration-300">
