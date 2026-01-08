@@ -2,20 +2,21 @@
 import { GoogleGenAI } from "@google/genai";
 import { PlayerStats, PlayerInfo } from "../types";
 
-export interface AIAnalysisResult {
-  report: string;
-  rating: number;
-}
+export interface AIAnalysisResult { report: string; rating: number; }
 
+/**
+ * Generates a scouting report based on player stats using Gemini API.
+ */
 export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerStats): Promise<AIAnalysisResult> => {
-  // Ensure we get the latest key from process.env.API_KEY
-  // We use a getter or re-initialize to avoid stale references
-  const apiKey = typeof process !== 'undefined' ? process.env.API_KEY : (window as any).process?.env?.API_KEY;
+  // Use process.env.API_KEY directly as specified in guidelines.
+  // The environment/shim ensures this is correctly populated after key selection.
+  const apiKey = process.env.API_KEY;
 
   if (!apiKey) {
     throw new Error("MISSING_API_KEY");
   }
 
+  // Create new instance before call to ensure latest API key is used.
   const ai = new GoogleGenAI({ apiKey });
   
   const prompt = `
@@ -55,10 +56,12 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
 
   try {
     const response = await ai.models.generateContent({
+      // Use full model name from guidelines for complex reasoning tasks.
       model: 'gemini-3-pro-preview',
       contents: prompt,
     });
     
+    // Use .text property directly, not as a method.
     const text = response.text || "";
     let rating = 6.0;
     
@@ -75,7 +78,6 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
     };
   } catch (error: any) {
     console.error("AI Error:", error);
-    // Propagate the error to be handled by the UI
     throw error;
   }
 };

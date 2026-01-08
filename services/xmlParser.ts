@@ -5,10 +5,13 @@ export const parseFootballXML = (xmlString: string): ParseResult => {
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlString, "text/xml");
   
+  if (xmlDoc.getElementsByTagName("parsererror").length > 0) {
+    console.error("XML Parsing Error");
+    return { events: [], stats: {} as PlayerStats };
+  }
+
   const rawInstances = xmlDoc.getElementsByTagName("instance");
   let detectedPlayerName = "";
-
-  // Temporal grouping map: timestamp -> list of actions/codes occurring at that time
   const temporalGroups: Map<string, { actions: string[], success: boolean, x: number, y: number }> = new Map();
 
   Array.from(rawInstances).forEach((instance) => {
@@ -29,12 +32,12 @@ export const parseFootballXML = (xmlString: string): ParseResult => {
       const group = label.getElementsByTagName("group")[0]?.textContent;
       const text = label.getElementsByTagName("text")[0]?.textContent;
 
-      if (group === "pos_x" && text !== "None") {
-        x = parseFloat(text || "0");
+      if (group === "pos_x" && text && text !== "None") {
+        x = parseFloat(text);
         hasCoords = true;
       }
-      if (group === "pos_y" && text !== "None") {
-        y = parseFloat(text || "0");
+      if (group === "pos_y" && text && text !== "None") {
+        y = parseFloat(text);
         hasCoords = true;
       }
       if (group === "Action") {
@@ -45,20 +48,19 @@ export const parseFootballXML = (xmlString: string): ParseResult => {
     if (!action) action = code;
     const lowerAction = action.toLowerCase();
     
-    // Strict success detection logic to avoid "inaccurate" matching "accurate"
     const isAccurate = lowerAction.includes("accurate") && !lowerAction.includes("inaccurate");
-    const isSuccessful = lowerAction.includes("successful") && !lowerAction.includes("unsuccessful");
-    const isWon = lowerAction.includes("won") && !lowerAction.includes("lost");
+    const isSuccessful = (lowerAction.includes("successful") || lowerAction.includes("sucesso")) && !lowerAction.includes("unsuccessful");
+    const isWon = lowerAction.includes("won") || lowerAction.includes("ganho");
     
     const success = (
       isAccurate || 
       isSuccessful || 
       isWon || 
-      lowerAction.includes("goals") ||
-      lowerAction.includes("recovery")
+      lowerAction.includes("goal") ||
+      lowerAction.includes("recovery") ||
+      lowerAction.includes("complete")
     );
 
-    // Filter out generic match/half markers
     if (lowerAction.includes("half") || lowerAction.includes("match")) return;
 
     const existing = temporalGroups.get(start);
@@ -91,64 +93,42 @@ export const parseFootballXML = (xmlString: string): ParseResult => {
 
   temporalGroups.forEach((data, timestamp) => {
     const { actions, success, x, y } = data;
-    const normX = (x / 105) * 100;
-    const normY = (y / 68) * 100;
+    // Normalização padrão para campo de 105x68
+    const normX = x ? (x / 105) * 100 : 50;
+    const normY = y ? (y / 68) * 100 : 50;
 
-    const primaryAction = actions[0];
     events.push({ 
-      type: primaryAction, 
+      type: actions[0], 
       x: normX, 
       y: normY, 
       success, 
       timestamp 
     });
 
-    // Helper to check for tags while respecting negations
-    const hasTag = (positives: string[], negatives: string[] = []) => {
-      const foundPositive = actions.some(a => positives.some(p => a.includes(p)));
-      if (!foundPositive) return false;
-      const foundNegative = actions.some(a => negatives.some(n => a.includes(n)));
-      return !foundNegative;
-    };
+    const hasTag = (pos: string[]) => actions.some(a => pos.some(p => a.includes(p)));
 
-    // DUELS
-    if (hasTag(["challenges won", "tackles successful", "air challenges won", "dribbles successful"])) {
-      duelsTotal++;
-      duelsWon++;
-    } else if (hasTag(["challenges", "duel", "tackle", "dribble"], ["half", "match"])) {
-      duelsTotal++;
-    }
-
-    // PASSES
     if (hasTag(["pass", "cross", "long ball"])) {
       passesTotal++;
-      // Check if this specific pass event was accurate
-      const isPassAccurate = actions.some(a => (a.includes("accurate") || a.includes("successful")) && !a.includes("inaccurate") && !a.includes("unsuccessful"));
-      if (isPassAccurate || (success && !actions.some(a => a.includes("inaccurate") || a.includes("unsuccessful")))) {
-        passesAccurateCount++;
-      }
+      if (success) passesAccurateCount++;
     }
 
-    // SHOTS / GOALS
-    if (hasTag(["shot", "goals"])) {
+    if (hasTag(["shot", "goal"])) {
       shotsTotal++;
-      if (hasTag(["target", "goals"], ["off target"])) {
-        shotsOnTarget++;
-      }
-      if (hasTag(["goal"], ["own", "contra"])) {
-        goals++;
-      }
+      if (success || hasTag(["target"])) shotsOnTarget++;
+      if (hasTag(["goal"])) goals++;
     }
 
-    // OTHER METRICS
+    if (hasTag(["duel", "challenge", "dribble"])) {
+      duelsTotal++;
+      if (success) duelsWon++;
+    }
+
     if (hasTag(["assist"])) assists++;
-    if (hasTag(["key pass", "shot assist", "passe decisivo"])) keyPasses++;
-    if (hasTag(["tackle"])) tackles++;
-    if (hasTag(["recovery", "interception"])) interceptions++;
-    
-    // CHANCES
-    if (hasTag(["big chance", "chance clara", "high value"])) chances++;
-    if (hasTag(["chance created", "chance criada", "key pass"])) chancesCreated++;
+    if (hasTag(["key pass", "decisivo"])) keyPasses++;
+    if (hasTag(["tackle", "desarme"])) tackles++;
+    if (hasTag(["interception", "recovery"])) interceptions++;
+    if (hasTag(["big chance"])) chances++;
+    if (hasTag(["chance created"])) chancesCreated++;
   });
 
   const stats: PlayerStats = {

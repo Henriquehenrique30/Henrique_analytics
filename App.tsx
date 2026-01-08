@@ -10,26 +10,10 @@ import StatCard from './components/StatCard';
 type Page = 'home' | 'player' | 'game' | 'roster' | 'analytics';
 type MetricFilter = 'goals' | 'assists' | 'keyPasses' | 'shots' | 'passes' | 'duels' | 'interceptions' | 'tackles' | null;
 
-// Extend Window interface for AI Studio helpers
-declare global {
-  interface Window {
-    aistudio: {
-      hasSelectedApiKey: () => Promise<boolean>;
-      openSelectKey: () => Promise<void>;
-    };
-    process: {
-      env: {
-        API_KEY?: string;
-      };
-    };
-  }
-}
-
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showAIModal, setShowAIModal] = useState(false);
-  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
   
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [games, setGames] = useState<RegisteredGame[]>([]);
@@ -38,36 +22,6 @@ const App: React.FC = () => {
   
   const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
-
-  // Check for API Key at startup
-  useEffect(() => {
-    const checkKey = async () => {
-      // In some environments process.env.API_KEY is pre-configured
-      const preConfigured = !!(typeof process !== 'undefined' && process.env.API_KEY);
-      if (preConfigured) {
-        setHasApiKey(true);
-        return;
-      }
-
-      // Otherwise check if aistudio selector was used
-      if (window.aistudio) {
-        const selected = await window.aistudio.hasSelectedApiKey();
-        setHasApiKey(selected);
-      } else {
-        // Fallback for non-aistudio environments
-        setHasApiKey(false);
-      }
-    };
-    checkKey();
-  }, []);
-
-  const handleSelectKey = async () => {
-    if (window.aistudio) {
-      await window.aistudio.openSelectKey();
-      // Assume success after triggering the dialog to avoid race conditions
-      setHasApiKey(true);
-    }
-  };
 
   const fetchData = async () => {
     setDataLoading(true);
@@ -137,35 +91,20 @@ const App: React.FC = () => {
       try {
         const xmlString = event.target?.result as string;
         if (!xmlString || xmlString.trim().length === 0) {
-          throw new Error("Arquivo XML vazio ou inválido.");
+          throw new Error("O arquivo XML está vazio.");
         }
 
         const { events, stats: parsedStats } = parseFootballXML(xmlString);
         
         if (events.length === 0) {
-          throw new Error("Nenhum evento detectado no XML. Verifique o formato.");
+          throw new Error("Não foi possível encontrar eventos no XML. Verifique se o formato está correto.");
         }
 
         const player = players.find(p => p.id === playerId);
-        if (!player) throw new Error("Atleta não encontrado no sistema.");
+        if (!player) throw new Error("Atleta não encontrado.");
 
-        let aiResult;
-        try {
-          aiResult = await generateScoutingReport(player, parsedStats);
-        } catch (aiErr: any) {
-          if (aiErr.message?.includes("Requested entity was not found")) {
-            showNotification("API Key expirada ou inválida. Selecione novamente.");
-            setHasApiKey(false);
-            return;
-          }
-          if (aiErr.message === "MISSING_API_KEY") {
-            showNotification("Configuração de API necessária.");
-            setHasApiKey(false);
-            return;
-          }
-          throw aiErr;
-        }
-
+        // Chamar IA para gerar o relatório
+        const aiResult = await generateScoutingReport(player, parsedStats);
         const finalStats = { ...parsedStats, rating: aiResult.rating };
         
         const analysisData = {
@@ -183,10 +122,7 @@ const App: React.FC = () => {
           onConflict: 'player_id,game_id' 
         }).select();
 
-        if (error) {
-          console.error("Supabase error:", error);
-          throw new Error(`Erro no Banco: ${error.message}`);
-        }
+        if (error) throw new Error(`Erro no Banco de Dados: ${error.message}`);
 
         setPerformances(prev => [
           ...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), 
@@ -198,10 +134,10 @@ const App: React.FC = () => {
           }
         ]);
         
-        showNotification(`Sucesso! Scout de ${player.name} atualizado.`);
+        showNotification(`Sucesso! Dados de ${player.name} processados.`);
         
       } catch (err: any) {
-        console.error("Upload process error:", err);
+        console.error("Process error:", err);
         showNotification(err.message || "Erro inesperado ao processar XML.");
       } finally {
         setLoading(false);
@@ -227,20 +163,18 @@ const App: React.FC = () => {
 
       if (selectedPhotoFile) {
         const fileExt = selectedPhotoFile.name.split('.').pop();
-        const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-        const filePath = `${fileName}`;
+        const fileName = `${Date.now()}.${fileExt}`;
 
         const { error: uploadError } = await supabase.storage
           .from('player-photos')
-          .upload(filePath, selectedPhotoFile);
+          .upload(fileName, selectedPhotoFile);
 
-        if (uploadError) throw uploadError;
-
-        const { data: urlData } = supabase.storage
-          .from('player-photos')
-          .getPublicUrl(filePath);
-        
-        photoUrl = urlData.publicUrl;
+        if (!uploadError) {
+          const { data: urlData } = supabase.storage
+            .from('player-photos')
+            .getPublicUrl(fileName);
+          photoUrl = urlData.publicUrl;
+        }
       }
 
       const { data, error } = await supabase.from('players').insert([{
@@ -255,11 +189,10 @@ const App: React.FC = () => {
       setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
       setPhotoPreview(null);
       setSelectedPhotoFile(null);
-      showNotification("Jogador cadastrado com sucesso!");
+      showNotification("Jogador cadastrado!");
       setCurrentPage('roster');
     } catch (err: any) {
-      console.error(err);
-      showNotification(`Erro: ${err.message || 'Falha ao salvar'}`);
+      showNotification("Erro ao salvar jogador.");
     } finally {
       setLoading(false);
     }
@@ -296,14 +229,12 @@ const App: React.FC = () => {
   };
 
   const deletePlayer = async (id: string) => {
-    if (window.confirm("Deseja remover este atleta permanentemente? Todos os scouts vinculados serão perdidos.")) {
+    if (window.confirm("Deseja remover este atleta?")) {
       const { error } = await supabase.from('players').delete().eq('id', id);
       if (!error) {
         setPlayers(prev => prev.filter(p => p.id !== id));
         setPerformances(prev => prev.filter(perf => perf.playerId !== id));
         showNotification("Atleta removido.");
-      } else {
-        showNotification("Erro ao excluir atleta.");
       }
     }
   };
@@ -315,8 +246,6 @@ const App: React.FC = () => {
         setGames(prev => prev.filter(g => g.id !== id));
         setPerformances(prev => prev.filter(perf => perf.gameId !== id));
         showNotification("Partida removida.");
-      } else {
-        showNotification("Erro ao excluir partida.");
       }
     }
   };
@@ -346,46 +275,16 @@ const App: React.FC = () => {
     });
   }, [selectedPerformance, metricFilter]);
 
-  const renderApiKeySelector = () => (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-[#0b1120] p-6">
-      <div className="bg-slate-900 border border-white/5 p-12 rounded-[3rem] max-w-md w-full text-center shadow-2xl">
-        <div className="w-20 h-20 bg-emerald-500/10 rounded-3xl flex items-center justify-center mx-auto mb-8 text-emerald-500 border border-emerald-500/20">
-          <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-        </div>
-        <h2 className="text-2xl font-black text-white mb-4 uppercase italic">Configuração de IA</h2>
-        <p className="text-slate-400 mb-8 text-sm font-medium leading-relaxed">
-          Para utilizar as análises inteligentes de desempenho, é necessário configurar uma chave de API válida.
-        </p>
-        <div className="space-y-4">
-          <button 
-            onClick={handleSelectKey}
-            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs transition-all shadow-lg shadow-emerald-600/20"
-          >
-            Selecionar API Key
-          </button>
-          <a 
-            href="https://ai.google.dev/gemini-api/docs/billing" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="block text-[10px] font-black text-slate-500 hover:text-white uppercase tracking-widest transition-colors"
-          >
-            Saiba mais sobre faturamento e cotas
-          </a>
-        </div>
-      </div>
-    </div>
-  );
-
   const renderHome = () => (
     <div className="h-[70vh] flex items-center justify-center">
       <div className="text-center p-12 bg-slate-900/40 border-2 border-dashed border-slate-800 rounded-[3rem] max-w-xl backdrop-blur-md">
         <div className="w-20 h-20 bg-emerald-500/10 rounded-3xl flex items-center justify-center mx-auto mb-6 text-emerald-500 border border-emerald-500/20">
-          <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" strokeWidth="1.5"/></svg>
+          <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" strokeWidth="2.5" /></svg>
         </div>
-        <h3 className="text-2xl font-black text-white mb-3">Scout Pro Cloud</h3>
-        <p className="text-slate-500 mb-8 font-medium italic">Seus dados agora estão seguros na nuvem Supabase.</p>
+        <h3 className="text-2xl font-black text-white mb-3">Bem-vindo ao Scout Pro</h3>
+        <p className="text-slate-500 mb-8 font-medium italic">Gerencie seu elenco e analise o desempenho tático com inteligência artificial.</p>
         <div className="flex gap-4 justify-center">
-          <button onClick={() => setCurrentPage('player')} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">Novo Jogador</button>
+          <button onClick={() => setCurrentPage('player')} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">Novo Atleta</button>
           <button onClick={() => setCurrentPage('game')} className="px-8 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all border border-white/5">Nova Partida</button>
         </div>
       </div>
@@ -403,7 +302,7 @@ const App: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {dataLoading ? (
-           <div className="col-span-full py-20 text-center animate-pulse text-slate-500 font-black uppercase tracking-widest">Carregando Banco de Dados...</div>
+           <div className="col-span-full py-20 text-center animate-pulse text-slate-500 font-black uppercase tracking-widest">Carregando Dados...</div>
         ) : players.length === 0 ? (
           <div className="col-span-full py-20 text-center text-slate-500 italic">Nenhum atleta cadastrado.</div>
         ) : players.map(player => {
@@ -436,22 +335,10 @@ const App: React.FC = () => {
                 </select>
 
                 <div className="space-y-2">
-                  {hasPerformance ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-center gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 font-black text-[10px] uppercase">
-                        ✓ Dados Importados
-                      </div>
-                      <label className="flex items-center justify-center gap-2 p-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all cursor-pointer font-black text-[9px] uppercase text-slate-400 hover:text-white">
-                        {loading ? 'Lendo...' : 'Substituir XML'}
-                        <input type="file" accept=".xml" className="hidden" disabled={loading} onChange={(e) => handlePerformanceUpload(e, player.id, playerGameId)} />
-                      </label>
-                    </div>
-                  ) : (
-                    <label className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed transition-all cursor-pointer font-black text-[10px] uppercase ${playerGameId ? 'border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/5' : 'border-slate-800 text-slate-600 opacity-50'}`}>
-                      {loading ? 'Lendo XML...' : 'Importar Scout XML'}
-                      <input type="file" accept=".xml" className="hidden" disabled={!playerGameId || loading} onChange={(e) => handlePerformanceUpload(e, player.id, playerGameId)} />
-                    </label>
-                  )}
+                  <label className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed transition-all cursor-pointer font-black text-[10px] uppercase ${playerGameId ? (hasPerformance ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500' : 'border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/5') : 'border-slate-800 text-slate-600 opacity-50'}`}>
+                    {loading ? 'Processando...' : (hasPerformance ? '✓ Substituir XML' : 'Importar Scout XML')}
+                    <input type="file" accept=".xml" className="hidden" disabled={!playerGameId || loading} onChange={(e) => handlePerformanceUpload(e, player.id, playerGameId)} />
+                  </label>
                 </div>
               </div>
             </div>
@@ -462,7 +349,6 @@ const App: React.FC = () => {
   );
 
   const renderAnalytics = () => {
-    const sortedGames = [...games];
     const playersInSelectedGame = players.filter(pl => performances.some(p => p.gameId === selectedGameId && p.playerId === pl.id));
 
     return (
@@ -471,12 +357,12 @@ const App: React.FC = () => {
           <div className="space-y-2">
             <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Partida</label>
             <div className="flex gap-2">
-              <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={selectedGameId || ''} onChange={(e) => { setSelectedGameId(e.target.value); setSelectedPlayerId(null); }}>
+              <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none" value={selectedGameId || ''} onChange={(e) => { setSelectedGameId(e.target.value); setSelectedPlayerId(null); }}>
                 <option value="">Escolha o jogo...</option>
-                {sortedGames.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam} ({g.date})</option>)}
+                {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam}</option>)}
               </select>
               {selectedGameId && (
-                <button onClick={() => deleteGame(selectedGameId)} className="p-3 bg-red-500/10 text-red-500 rounded-2xl border border-red-500/20 hover:bg-red-500/20 transition-all">
+                <button onClick={() => deleteGame(selectedGameId)} className="p-3 bg-red-500/10 text-red-500 rounded-2xl border border-red-500/20">
                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                 </button>
               )}
@@ -484,7 +370,7 @@ const App: React.FC = () => {
           </div>
           <div className="space-y-2">
             <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Atleta</label>
-            <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none focus:ring-1 focus:ring-emerald-500/50" disabled={!selectedGameId} value={selectedPlayerId || ''} onChange={(e) => setSelectedPlayerId(e.target.value)}>
+            <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none" disabled={!selectedGameId} value={selectedPlayerId || ''} onChange={(e) => setSelectedPlayerId(e.target.value)}>
               <option value="">Escolha o atleta...</option>
               {playersInSelectedGame.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
@@ -492,7 +378,7 @@ const App: React.FC = () => {
           <div className="flex gap-2">
              <button onClick={() => window.print()} disabled={!selectedPerformance} className="flex-grow bg-white text-slate-900 font-black py-3 rounded-2xl text-[10px] uppercase tracking-widest disabled:opacity-20 hover:bg-slate-100 transition-all">Exportar PDF</button>
              {selectedPerformance && (
-               <button onClick={() => setShowAIModal(true)} className="bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20">
+               <button onClick={() => setShowAIModal(true)} className="bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-500 transition-all">
                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
                  IA
                </button>
@@ -511,20 +397,16 @@ const App: React.FC = () => {
 
                 <div className="lg:col-span-5 space-y-4">
                   <div className="bg-slate-900/60 p-6 rounded-[2.5rem] border border-white/5">
-                    <h4 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                      <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
-                      Scout Detalhado
-                    </h4>
+                    <h4 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">Scout Detalhado</h4>
                     <div className="grid grid-cols-2 gap-3">
-                      <StatCard label="Gols" value={selectedPerformance.analysis.stats.goals} icon={<span className="text-[10px] font-black">⚽</span>} color="bg-emerald-500/20 text-emerald-500" isActive={metricFilter === 'goals'} onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')} />
-                      <StatCard label="Assistências" value={selectedPerformance.analysis.stats.assists} icon={<span className="text-[10px] font-black">🎯</span>} color="bg-blue-500/20 text-blue-500" isActive={metricFilter === 'assists'} onClick={() => setMetricFilter(metricFilter === 'assists' ? null : 'assists')} />
-                      <StatCard label="Passes Decisivos" value={selectedPerformance.analysis.stats.keyPasses} icon={<span className="text-[10px] font-black">🔑</span>} color="bg-yellow-500/20 text-yellow-500" isActive={metricFilter === 'keyPasses'} onClick={() => setMetricFilter(metricFilter === 'keyPasses' ? null : 'keyPasses')} />
-                      <StatCard label="Total de Passes" value={selectedPerformance.analysis.stats.passes} suffix={`(${selectedPerformance.analysis.stats.passAccuracy.toFixed(0)}%)`} icon={<span className="text-[10px] font-black">P</span>} color="bg-slate-700/50 text-white" isActive={metricFilter === 'passes'} onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')} />
-                      <StatCard label="Total de Duelos" value={selectedPerformance.analysis.stats.duels} icon={<span className="text-[10px] font-black">Σ</span>} color="bg-slate-800/80 text-slate-400" />
-                      <StatCard label="Duelos Vencidos" value={selectedPerformance.analysis.stats.duelsWon} icon={<span className="text-[10px] font-black">⚔️</span>} color="bg-red-500/20 text-red-500" isActive={metricFilter === 'duels'} onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')} />
-                      <StatCard label="Chutes (Alvo/Total)" value={`${selectedPerformance.analysis.stats.shotsOnTarget}/${selectedPerformance.analysis.stats.shots}`} icon={<span className="text-[10px] font-black">⚡</span>} color="bg-orange-500/20 text-orange-500" isActive={metricFilter === 'shots'} onClick={() => setMetricFilter(metricFilter === 'shots' ? null : 'shots')} />
-                      <StatCard label="Interceptações" value={selectedPerformance.analysis.stats.interceptions} icon={<span className="text-[10px] font-black">🛡️</span>} color="bg-purple-500/20 text-purple-500" isActive={metricFilter === 'interceptions'} onClick={() => setMetricFilter(metricFilter === 'interceptions' ? null : 'interceptions')} />
-                      <StatCard label="Desarmes" value={selectedPerformance.analysis.stats.tackles} icon={<span className="text-[10px] font-black">🧤</span>} color="bg-cyan-500/20 text-cyan-500" isActive={metricFilter === 'tackles'} onClick={() => setMetricFilter(metricFilter === 'tackles' ? null : 'tackles')} />
+                      <StatCard label="Gols" value={selectedPerformance.analysis.stats.goals} icon="⚽" color="bg-emerald-500/20 text-emerald-500" isActive={metricFilter === 'goals'} onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')} />
+                      <StatCard label="Assistências" value={selectedPerformance.analysis.stats.assists} icon="🎯" color="bg-blue-500/20 text-blue-500" isActive={metricFilter === 'assists'} onClick={() => setMetricFilter(metricFilter === 'assists' ? null : 'assists')} />
+                      <StatCard label="Passes Decisivos" value={selectedPerformance.analysis.stats.keyPasses} icon="🔑" color="bg-yellow-500/20 text-yellow-500" isActive={metricFilter === 'keyPasses'} onClick={() => setMetricFilter(metricFilter === 'keyPasses' ? null : 'keyPasses')} />
+                      <StatCard label="Total de Passes" value={selectedPerformance.analysis.stats.passes} suffix={`(${selectedPerformance.analysis.stats.passAccuracy.toFixed(0)}%)`} icon="P" color="bg-slate-700/50 text-white" isActive={metricFilter === 'passes'} onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')} />
+                      <StatCard label="Duelos Vencidos" value={selectedPerformance.analysis.stats.duelsWon} icon="⚔️" color="bg-red-500/20 text-red-500" isActive={metricFilter === 'duels'} onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')} />
+                      <StatCard label="Chutes (Alvo/Total)" value={`${selectedPerformance.analysis.stats.shotsOnTarget}/${selectedPerformance.analysis.stats.shots}`} icon="⚡" color="bg-orange-500/20 text-orange-500" isActive={metricFilter === 'shots'} onClick={() => setMetricFilter(metricFilter === 'shots' ? null : 'shots')} />
+                      <StatCard label="Interceptações" value={selectedPerformance.analysis.stats.interceptions} icon="🛡️" color="bg-purple-500/20 text-purple-500" isActive={metricFilter === 'interceptions'} onClick={() => setMetricFilter(metricFilter === 'interceptions' ? null : 'interceptions')} />
+                      <StatCard label="Desarmes" value={selectedPerformance.analysis.stats.tackles} icon="🧤" color="bg-cyan-500/20 text-cyan-500" isActive={metricFilter === 'tackles'} onClick={() => setMetricFilter(metricFilter === 'tackles' ? null : 'tackles')} />
                       <div className="bg-emerald-500/10 p-5 rounded-[1.5rem] border border-emerald-500/20 flex flex-col justify-center">
                          <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest mb-1">RATING FINAL</span>
                          <span className="text-3xl font-black text-white italic">{selectedPerformance.analysis.stats.rating.toFixed(1)}</span>
@@ -534,7 +416,7 @@ const App: React.FC = () => {
                 </div>
             </div>
           </div>
-        ) : <p className="text-center py-20 text-slate-500 italic font-medium">Selecione uma partida e um atleta para ver a análise completa.</p>}
+        ) : <p className="text-center py-20 text-slate-500 italic font-medium">Selecione partida e atleta para ver análise.</p>}
       </div>
     );
   };
@@ -542,30 +424,14 @@ const App: React.FC = () => {
   const renderAIModal = () => {
     if (!selectedPerformance || !showAIModal) return null;
     return (
-      <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-300">
-        <div className="bg-slate-900 border border-white/10 w-full max-w-2xl rounded-[3rem] overflow-hidden shadow-2xl animate-in zoom-in-95 duration-300">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-md">
+        <div className="bg-slate-900 border border-white/10 w-full max-w-2xl rounded-[3rem] overflow-hidden shadow-2xl">
           <div className="p-8 border-b border-white/5 flex items-center justify-between bg-slate-800/20">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-full bg-emerald-500 flex flex-col items-center justify-center text-white font-black">
-                <span className="text-[6px] uppercase leading-none">NOTA</span>
-                <span className="text-lg italic leading-none">{selectedPerformance.analysis.stats.rating.toFixed(1)}</span>
-              </div>
-              <div>
-                <h3 className="text-xl font-black text-white uppercase italic leading-none">{selectedPerformance.analysis.player.name}</h3>
-                <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mt-1">Scout Profissional IA</p>
-              </div>
-            </div>
-            <button onClick={() => setShowAIModal(false)} className="p-3 rounded-full hover:bg-white/5 text-slate-400 transition-all">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth="2.5" strokeLinecap="round"/></svg>
-            </button>
+            <h3 className="text-xl font-black text-white uppercase italic leading-none">{selectedPerformance.analysis.player.name} - Scout IA</h3>
+            <button onClick={() => setShowAIModal(false)} className="p-3 text-slate-400">Fechar</button>
           </div>
-          <div className="p-10 max-h-[60vh] overflow-y-auto">
-            <div className="prose prose-invert max-w-none text-slate-300 font-medium leading-relaxed whitespace-pre-line text-sm italic">
-              {selectedPerformance.analysis.aiInsights}
-            </div>
-          </div>
-          <div className="p-6 bg-slate-800/10 border-t border-white/5 text-center">
-             <button onClick={() => setShowAIModal(false)} className="px-10 py-3 bg-white text-slate-900 font-black rounded-2xl uppercase text-[10px] tracking-widest hover:bg-slate-100 transition-all">Fechar Relatório</button>
+          <div className="p-10 max-h-[60vh] overflow-y-auto italic">
+            {selectedPerformance.analysis.aiInsights}
           </div>
         </div>
       </div>
@@ -574,38 +440,23 @@ const App: React.FC = () => {
 
   const renderRegisterPlayer = () => (
     <div className="max-w-xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 backdrop-blur-xl">
+      <div className="bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5">
         <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Novo Atleta</h3>
         <div className="space-y-4">
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Nome</label>
-            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Lucas Silva" value={newPlayer.name} onChange={(e) => setNewPlayer(p => ({ ...p, name: e.target.value }))} />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Posição</label>
-            <select className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newPlayer.position} onChange={(e) => setNewPlayer(p => ({ ...p, position: e.target.value }))}>
-              <option>Goleiro</option><option>Zagueiro</option><option>Lateral</option><option>Meio-Campista</option><option>Extremo</option><option>Atacante</option>
-            </select>
-          </div>
-          
-          <div className="flex items-center gap-6 bg-slate-800/30 p-4 rounded-2xl border border-white/5">
-            <div className="w-20 h-20 rounded-xl bg-slate-800 overflow-hidden flex-shrink-0 border border-white/5">
-              {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-600"><svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg></div>}
+          <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Nome" value={newPlayer.name} onChange={(e) => setNewPlayer(p => ({ ...p, name: e.target.value }))} />
+          <select className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" value={newPlayer.position} onChange={(e) => setNewPlayer(p => ({ ...p, position: e.target.value }))}>
+            <option>Goleiro</option><option>Zagueiro</option><option>Lateral</option><option>Meio-Campista</option><option>Extremo</option><option>Atacante</option>
+          </select>
+          <div className="flex items-center gap-6">
+            <div className="w-16 h-16 rounded-xl bg-slate-800 overflow-hidden border border-white/5">
+              {photoPreview && <img src={photoPreview} className="w-full h-full object-cover" />}
             </div>
-            <div className="flex-grow">
-              <label className="block w-full bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer transition-all text-emerald-400">
-                {selectedPhotoFile ? 'Trocar Foto' : 'Anexar Foto (Bucket)'}
-                <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-              </label>
-              <p className="text-[8px] text-slate-500 mt-2 italic">* O bucket 'player-photos' deve ser público no Supabase.</p>
-            </div>
+            <label className="flex-grow bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer text-emerald-400">
+              Anexar Foto
+              <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
+            </label>
           </div>
-
-          <button 
-            onClick={savePlayer} 
-            disabled={loading || !newPlayer.name}
-            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm mt-4 shadow-lg shadow-emerald-600/20 transition-all"
-          >
+          <button onClick={savePlayer} disabled={loading || !newPlayer.name} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-sm mt-4">
             {loading ? 'Salvando...' : 'Salvar Cadastro'}
           </button>
         </div>
@@ -615,32 +466,16 @@ const App: React.FC = () => {
 
   const renderRegisterGame = () => (
     <div className="max-w-xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 backdrop-blur-xl">
+      <div className="bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5">
         <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Registrar Partida</h3>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Time Casa</label>
-              <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Porto" value={newGame.homeTeam} onChange={(e) => setNewGame(g => ({ ...g, homeTeam: e.target.value }))} />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Time Fora</label>
-              <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Benfica" value={newGame.awayTeam} onChange={(e) => setNewGame(g => ({ ...g, awayTeam: e.target.value }))} />
-            </div>
+            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Casa" value={newGame.homeTeam} onChange={(e) => setNewGame(g => ({ ...g, homeTeam: e.target.value }))} />
+            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Fora" value={newGame.awayTeam} onChange={(e) => setNewGame(g => ({ ...g, awayTeam: e.target.value }))} />
           </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Data</label>
-            <input type="date" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newGame.date} onChange={(e) => setNewGame(g => ({ ...g, date: e.target.value }))} />
-          </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Competição</label>
-            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Campeonato Estadual" value={newGame.competition} onChange={(e) => setNewGame(g => ({ ...g, competition: e.target.value }))} />
-          </div>
-          <button 
-            onClick={saveGame} 
-            disabled={loading || !newGame.homeTeam || !newGame.awayTeam}
-            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm mt-4 shadow-lg shadow-emerald-600/20 transition-all"
-          >
+          <input type="date" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" value={newGame.date} onChange={(e) => setNewGame(g => ({ ...g, date: e.target.value }))} />
+          <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Competição" value={newGame.competition} onChange={(e) => setNewGame(g => ({ ...g, competition: e.target.value }))} />
+          <button onClick={saveGame} disabled={loading || !newGame.homeTeam} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-sm mt-4">
             {loading ? 'Salvando...' : 'Criar Registro'}
           </button>
         </div>
@@ -650,40 +485,29 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-200 flex overflow-hidden font-inter">
-      {hasApiKey === false && renderApiKeySelector()}
-      {renderAIModal()}
-      <aside className={`border-r border-white/5 bg-slate-900/40 backdrop-blur-md flex flex-col sticky top-0 h-screen transition-all duration-300 ${isSidebarOpen ? 'w-64' : 'w-0 overflow-hidden'}`}>
-        <div className="p-7 w-64">
+      <aside className={`border-r border-white/5 bg-slate-900/40 w-64 flex flex-col h-screen sticky top-0 transition-all ${isSidebarOpen ? 'ml-0' : '-ml-64'}`}>
+        <div className="p-7">
           <div className="flex items-center gap-3 mb-12">
-            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20"><svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" strokeWidth="2.5" /></svg></div>
+            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center"><svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" strokeWidth="2.5" /></svg></div>
             <h1 className="text-lg font-black text-white italic tracking-tighter uppercase leading-none">Scout<br/>Pro</h1>
           </div>
           <nav className="space-y-1">
-            <button onClick={() => setCurrentPage('home')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'home' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Início</button>
-            <button onClick={() => setCurrentPage('roster')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'roster' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Elenco</button>
-            <button onClick={() => setCurrentPage('analytics')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'analytics' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Análises</button>
-            <div className="pt-6 pb-2 px-4 text-[8px] font-black text-slate-600 uppercase tracking-widest">Registros</div>
-            <button onClick={() => setCurrentPage('player')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'player' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Atleta</button>
-            <button onClick={() => setCurrentPage('game')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'game' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Jogo</button>
+            <button onClick={() => setCurrentPage('home')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'home' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Início</button>
+            <button onClick={() => setCurrentPage('roster')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'roster' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Elenco</button>
+            <button onClick={() => setCurrentPage('analytics')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'analytics' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Análises</button>
+            <div className="pt-6 pb-2 px-4 text-[8px] font-black text-slate-600 uppercase">Registros</div>
+            <button onClick={() => setCurrentPage('player')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'player' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Atleta</button>
+            <button onClick={() => setCurrentPage('game')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase ${currentPage === 'game' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Jogo</button>
           </nav>
         </div>
       </aside>
 
       <div className="flex-grow flex flex-col h-screen overflow-y-auto">
-        {successMessage && <div className="fixed top-6 right-6 z-[110] animate-in slide-in-from-right-8 fade-in"><div className="bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl font-bold flex items-center gap-2">✓ {successMessage}</div></div>}
+        {successMessage && <div className="fixed top-6 right-6 z-[110] bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl font-bold">✓ {successMessage}</div>}
         <header className="h-16 border-b border-white/5 flex items-center px-10 bg-slate-900/20 backdrop-blur-sm sticky top-0 z-40">
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors">
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-slate-800 text-slate-400 rounded-lg">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h8m-8 6h16" strokeWidth="2.5"/></svg>
           </button>
-          <div className="ml-auto text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-            Sistema Ativo
-            {hasApiKey === false && (
-              <button onClick={handleSelectKey} className="ml-4 px-3 py-1 bg-red-500/10 text-red-500 rounded-full border border-red-500/20 text-[8px] hover:bg-red-500/20 transition-all">
-                Configurar API
-              </button>
-            )}
-          </div>
         </header>
         <main className="p-8 pb-20">
           {currentPage === 'home' && renderHome()}
