@@ -48,19 +48,20 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
   let keyPasses = 0;
   let chancesCreated = 0;
 
-  // Função auxiliar para determinar sucesso baseada em propriedades ou texto
+  // Função auxiliar para determinar sucesso usando as flags do seu arquivo (isSuccess/isFailure)
   const determineSuccess = (event: any, actionName: string): boolean => {
-    // 1. Prioridade: Flags booleanas explícitas do JSON (Seu formato atual)
+    // 1. Prioridade absoluta: O que o arquivo diz explicitamente
     if (typeof event.isFailure === 'boolean' && event.isFailure) return false;
     if (typeof event.isSuccess === 'boolean' && event.isSuccess) return true;
     
-    // 2. Fallback: Análise de texto (Formatos antigos/Wyscout Raw)
+    // 2. Fallback: Análise de texto (apenas se o arquivo não tiver as flags)
     const lower = actionName.toLowerCase();
     const isFailureText = lower.includes("inaccurate") || 
                           lower.includes("unsuccessful") || 
                           lower.includes("lost") || 
                           lower.includes("mistake") || 
-                          lower.includes("miss");
+                          lower.includes("miss") ||
+                          lower.includes("error");
     
     if (isFailureText) return false;
 
@@ -71,7 +72,7 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
            lower.includes("successful");
   };
 
-  // Função central de processamento
+  // Processa cada evento individualmente
   const processEventItem = (actionName: string, x: number, y: number, time: string, rawEvent: any) => {
     const isSuccessful = determineSuccess(rawEvent, actionName);
     const lowerAction = actionName.toLowerCase();
@@ -80,20 +81,19 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
     const normX = x > 100 ? (x / 105) * 100 : x;
     const normY = y > 100 ? (y / 68) * 100 : y;
 
-    // Adiciona ao array de eventos (Nenhum evento é ignorado)
     events.push({
-      type: actionName, // Mantém o nome original (ex: "Goal mistakes")
+      type: actionName,
       x: normX,
       y: normY,
       success: isSuccessful,
       timestamp: time
     });
 
-    // --- Classificação de Estatísticas ---
+    // --- Mapeamento de Estatísticas ---
     const matches = (keywords: string[]) => keywords.some(k => lowerAction.includes(k));
 
     // Passes
-    // Usa flag isPass se existir, senão busca por texto
+    // Usa a flag isPass do arquivo se existir
     const isPass = typeof rawEvent.isPass === 'boolean' ? rawEvent.isPass : matches(["pass", "cross", "long ball"]);
     if (isPass) {
       passesTotal++;
@@ -101,18 +101,22 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
     }
 
     // Finalizações e Gols
+    // Usa a flag isShot do arquivo se existir
     const isShot = typeof rawEvent.isShot === 'boolean' ? rawEvent.isShot : matches(["shot", "goal"]);
+    
     if (isShot || matches(["shot", "goal"])) {
-      // Filtra erros explícitos de "mistake" para não contar como shot se for um erro bizarro,
-      // mas se for "Goal mistake" (perda de gol), conta como chance perdida (shot), mas não gol.
+      // Se for "Goal mistakes" (falha), não conta como chute a gol, apenas erro
       if (!lowerAction.includes("mistake") || lowerAction.includes("goal")) {
          shotsTotal++;
       }
       
       if (isSuccessful || lowerAction.includes("target")) shotsOnTarget++;
 
-      // LÓGICA DE GOL CORRIGIDA:
-      // Só é gol se: Tem "goal" no nome, teve sucesso (não é failure), e não é contra ou tiro de meta.
+      // CORREÇÃO DEFINITIVA DO GOL:
+      // Só conta gol se: 
+      // 1. Tem "goal" no nome 
+      // 2. O arquivo diz que foi SUCESSO (isSuccess=true / isFailure=false)
+      // 3. Não é gol contra ou tiro de meta
       if (lowerAction.includes("goal") && 
           isSuccessful && 
           !lowerAction.includes("own goal") && 
@@ -135,9 +139,9 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
     if (lowerAction.includes("chance created")) chancesCreated++;
   };
 
-  // --- Detecção de Formato e Iteração ---
+  // --- Detecção de Formato ---
 
-  // CASO 1: Formato Wyscout Raw (Array direto de instâncias)
+  // CASO 1: Formato Wyscout Raw (Array direto)
   if (Array.isArray(jsonData)) {
     jsonData.forEach((instance: JSONInstance) => {
       const code = (instance.code || "").toLowerCase();
@@ -155,23 +159,21 @@ export const parseFootballJSON = (jsonData: any): ParseResult => {
       processEventItem(actionName, x, y, instance.start, instance);
     });
   } 
-  // CASO 2: Formato Scout Moderno (Objeto com lista 'events')
+  // CASO 2: Seu Formato JSON (Objeto com array 'events')
   else if (jsonData && jsonData.events && Array.isArray(jsonData.events)) {
     jsonData.events.forEach((event: any) => {
       const actionName = event.type || "";
       let x = 50, y = 50;
 
-      // Extração de coordenadas das tags ou propriedades diretas
       if (event.tags && Array.isArray(event.tags) && event.tags.length >= 5) {
         const parsedX = parseFloat(event.tags[3]);
         const parsedY = parseFloat(event.tags[4]);
         if (!isNaN(parsedX)) x = parsedX;
         if (!isNaN(parsedY)) y = parsedY;
-      } else if (event.start && typeof event.start === 'number' && event.start > 1000) {
-          // Fallback coords
       }
 
       const time = event.start ? event.start.toString() : "0";
+      // Passamos o objeto 'event' completo para verificar as flags isFailure/isSuccess
       processEventItem(actionName, x, y, time, event);
     });
   } else {
