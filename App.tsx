@@ -1,31 +1,53 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { PlayerInfo, RegisteredGame, MatchPerformance } from './types';
 import { parseFootballXML } from './services/xmlParser';
 import { generateScoutingReport } from './services/geminiService';
+import { supabase } from './lib/supabase';
 import PitchHeatmap from './components/PitchHeatmap';
 import StatCard from './components/StatCard';
-import { supabase } from './lib/supabase';
-import { Target, Activity, Share2, Shield, MousePointer2 } from 'lucide-react';
 
-// Tipos locais para navegação
 type Page = 'home' | 'player' | 'game' | 'roster' | 'analytics';
 type MetricFilter = 'goals' | 'assists' | 'keyPasses' | 'shots' | 'passes' | 'duels' | 'interceptions' | 'tackles' | null;
 
 const App: React.FC = () => {
-  // --- ESTADOS ---
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [showAIModal, setShowAIModal] = useState(false);
   
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [games, setGames] = useState<RegisteredGame[]>([]);
   const [performances, setPerformances] = useState<MatchPerformance[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  
+  // File upload state
+  const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  // Initial Data Fetch
+  const fetchData = async () => {
+    setDataLoading(true);
+    const { data: pData } = await supabase.from('players').select('*').order('name');
+    const { data: gData } = await supabase.from('games').select('*').order('date', { ascending: false });
+    const { data: perfData } = await supabase.from('performances').select('*');
+    
+    if (pData) setPlayers(pData.map((p: any) => ({ ...p, photoUrl: p.photo_url })));
+    if (gData) setGames(gData.map((g: any) => ({ 
+      id: g.id, homeTeam: g.home_team, awayTeam: g.away_team, date: g.date, competition: g.competition 
+    })));
+    if (perfData) setPerformances(perfData);
+    setDataLoading(false);
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
 
   const [newPlayer, setNewPlayer] = useState<Omit<PlayerInfo, 'id'>>({
     name: '',
     photoUrl: null,
     position: 'Meio-Campista'
   });
-  
   const [newGame, setNewGame] = useState<Omit<RegisteredGame, 'id'>>({
     homeTeam: '',
     awayTeam: '',
@@ -35,159 +57,19 @@ const App: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  
   const [metricFilter, setMetricFilter] = useState<MetricFilter>(null);
-  const [selectedGameId, setSelectedGameId] = useState<string>("");
-  const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
-  const [heatmapIntensity, setHeatmapIntensity] = useState(20);
-
-  // --- EFEITOS ---
-  useEffect(() => {
-    fetchInitialData();
-  }, []);
-
-  const fetchInitialData = async () => {
-    try {
-      setLoading(true);
-      const { data: pData } = await supabase.from('players').select('*');
-      const { data: gData } = await supabase.from('games').select('*');
-      const { data: perfData } = await supabase.from('performances').select('*');
-      
-      // Mapeamento JOGADORES (banco -> app)
-      if (pData) {
-        const mappedPlayers = pData.map((p: any) => ({
-          ...p,
-          photoUrl: p.photo_url || p.photoUrl // Garante compatibilidade
-        }));
-        setPlayers(mappedPlayers);
-      }
-
-      // Mapeamento JOGOS (banco -> app)
-      // CORREÇÃO: Converte home_team para homeTeam, etc.
-      if (gData) {
-        const mappedGames = gData.map((g: any) => ({
-          id: g.id,
-          homeTeam: g.home_team, // O banco retorna com underline
-          awayTeam: g.away_team,
-          date: g.date,
-          competition: g.competition
-        }));
-        setGames(mappedGames);
-      }
-
-      if (perfData) setPerformances(perfData);
-    } catch (err) {
-      console.error("Fetch error:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [rosterGameSelection, setRosterGameSelection] = useState<Record<string, string>>({});
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
 
   const showNotification = (msg: string) => {
     setSuccessMessage(msg);
     setTimeout(() => setSuccessMessage(null), 3000);
   };
 
-  // --- FUNÇÕES DE UPLOAD E SALVAMENTO ---
-
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePerformanceUpload = async (e: React.ChangeEvent<HTMLInputElement>, playerId: string, gameId: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    setLoading(true);
-    try {
-      if (!supabase.storage) throw new Error("Supabase Storage não inicializado");
-
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${crypto.randomUUID()}.${fileExt}`;
-      const filePath = `avatars/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('player-photos')
-        .upload(filePath, file, { cacheControl: '3600', upsert: false });
-
-      if (uploadError) throw new Error(uploadError.message);
-
-      const { data: { publicUrl } } = supabase.storage.from('player-photos').getPublicUrl(filePath);
-      setNewPlayer(prev => ({ ...prev, photoUrl: publicUrl }));
-      showNotification("Foto carregada com sucesso!");
-    } catch (err: any) {
-      console.error("Photo Upload Error:", err);
-      showNotification(`Erro no upload: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const savePlayer = async () => {
-    if (!newPlayer.name) return;
-    setLoading(true);
-    try {
-      const { data, error } = await supabase.from('players').insert({
-        name: newPlayer.name,
-        photo_url: newPlayer.photoUrl, 
-        position: newPlayer.position
-      }).select().single();
-      
-      if (error) throw error;
-      
-      if (data) {
-        const savedPlayer = { ...data, photoUrl: data.photo_url };
-        setPlayers(prev => [...prev, savedPlayer]);
-        setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
-        showNotification("Jogador salvo no banco de dados!");
-      }
-    } catch (err: any) {
-      console.error("Save Player Error:", err);
-      showNotification(`Erro ao salvar: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // --- FUNÇÃO CORRIGIDA: SAVE GAME ---
-  const saveGame = async () => {
-    if (!newGame.homeTeam || !newGame.awayTeam) return;
-    setLoading(true);
-    try {
-      // CORREÇÃO: Mapeando camelCase (React) para snake_case (Supabase)
-      const { data, error } = await supabase.from('games').insert({
-        home_team: newGame.homeTeam,
-        away_team: newGame.awayTeam,
-        date: newGame.date,
-        competition: newGame.competition
-      }).select().single();
-
-      if (error) throw error;
-
-      if (data) {
-        // CORREÇÃO: Mapeando volta snake_case (Supabase) para camelCase (React)
-        const savedGame: RegisteredGame = {
-            id: data.id,
-            homeTeam: data.home_team,
-            awayTeam: data.away_team,
-            date: data.date,
-            competition: data.competition
-        };
-        
-        setGames(prev => [...prev, savedGame]);
-        setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
-        showNotification("Partida cadastrada!");
-      }
-    } catch (err: any) {
-      console.error("Save Game Error:", err);
-      showNotification(`Erro: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePerformanceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !selectedPlayerId || !selectedGameId) {
-      showNotification("Selecione Jogador e Partida antes de enviar o XML.");
-      return;
-    }
 
     setLoading(true);
     const reader = new FileReader();
@@ -196,40 +78,149 @@ const App: React.FC = () => {
         const xmlString = event.target?.result as string;
         const { events, stats: parsedStats } = parseFootballXML(xmlString);
         
-        const player = players.find(p => p.id === selectedPlayerId);
+        const player = players.find(p => p.id === playerId);
         if (!player) return;
 
-        // Gera relatório com IA
         const aiResult = await generateScoutingReport(player, parsedStats);
         const finalStats = { ...parsedStats, rating: aiResult.rating };
         
-        // Em produção, salvaríamos no banco. Aqui salvamos no estado local.
-        const performanceState: MatchPerformance = {
-            id: crypto.randomUUID(),
-            playerId: selectedPlayerId,
-            gameId: selectedGameId,
-            analysis: {
-                player,
-                events,
-                stats: finalStats,
-                aiInsights: aiResult.report
-            }
+        const analysisData = {
+          player,
+          events,
+          stats: finalStats,
+          aiInsights: aiResult.report
         };
 
-        setPerformances(prev => [...prev, performanceState]);
+        const { data, error } = await supabase.from('performances').upsert([{
+          player_id: playerId,
+          game_id: gameId,
+          analysis: analysisData
+        }], { onConflict: 'player_id,game_id' }).select();
+
+        if (error) throw error;
+
+        setPerformances(prev => [...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), data[0]]);
         showNotification(`Sucesso! Scout de ${player.name} processado.`);
+        
       } catch (err) {
         console.error("Upload error:", err);
         showNotification("Erro ao processar arquivo XML.");
       } finally {
         setLoading(false);
-        e.target.value = '';
+        if (e.target) e.target.value = '';
       }
     };
     reader.readAsText(file);
   };
 
-  // --- LÓGICA DE DADOS (MEMO) ---
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedPhotoFile(file);
+      setPhotoPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const savePlayer = async () => {
+    if (!newPlayer.name) return;
+    setLoading(true);
+    try {
+      let photoUrl = null;
+
+      if (selectedPhotoFile) {
+        const fileExt = selectedPhotoFile.name.split('.').pop();
+        const fileName = `${Math.random()}.${fileExt}`;
+        const filePath = `${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('player-photos')
+          .upload(filePath, selectedPhotoFile);
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('player-photos')
+          .getPublicUrl(filePath);
+        
+        photoUrl = urlData.publicUrl;
+      }
+
+      const { data, error } = await supabase.from('players').insert([{
+        name: newPlayer.name,
+        photo_url: photoUrl,
+        position: newPlayer.position
+      }]).select();
+
+      if (error) throw error;
+
+      setPlayers(prev => [...prev, { ...data[0], photoUrl: data[0].photo_url }]);
+      setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
+      setPhotoPreview(null);
+      setSelectedPhotoFile(null);
+      showNotification("Jogador cadastrado com sucesso!");
+      setCurrentPage('roster');
+    } catch (err) {
+      console.error(err);
+      showNotification("Erro ao salvar jogador. Verifique se o bucket 'player-photos' existe.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveGame = async () => {
+    if (!newGame.homeTeam || !newGame.awayTeam) return;
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.from('games').insert([{
+        home_team: newGame.homeTeam,
+        away_team: newGame.awayTeam,
+        date: newGame.date,
+        competition: newGame.competition
+      }]).select();
+
+      if (error) throw error;
+
+      setGames(prev => [...prev, { 
+        id: data[0].id, 
+        homeTeam: data[0].home_team, 
+        awayTeam: data[0].away_team, 
+        date: data[0].date, 
+        competition: data[0].competition 
+      }]);
+      setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
+      showNotification("Partida cadastrada!");
+      setCurrentPage('analytics');
+    } catch (err) {
+      showNotification("Erro ao salvar partida.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deletePlayer = async (id: string) => {
+    if (window.confirm("Deseja remover este atleta permanentemente? Todos os scouts vinculados serão perdidos.")) {
+      const { error } = await supabase.from('players').delete().eq('id', id);
+      if (!error) {
+        setPlayers(prev => prev.filter(p => p.id !== id));
+        setPerformances(prev => prev.filter(perf => perf.playerId !== id));
+        showNotification("Atleta removido.");
+      } else {
+        showNotification("Erro ao excluir.");
+      }
+    }
+  };
+
+  const deleteGame = async (id: string) => {
+    if (window.confirm("Deseja remover esta partida?")) {
+      const { error } = await supabase.from('games').delete().eq('id', id);
+      if (!error) {
+        setGames(prev => prev.filter(g => g.id !== id));
+        setPerformances(prev => prev.filter(perf => perf.gameId !== id));
+        showNotification("Partida removida.");
+      }
+    }
+  };
+
   const selectedPerformance = useMemo(() => 
     performances.find(p => p.gameId === selectedGameId && p.playerId === selectedPlayerId),
     [performances, selectedGameId, selectedPlayerId]
@@ -238,21 +229,22 @@ const App: React.FC = () => {
   const filteredEvents = useMemo(() => {
     if (!selectedPerformance) return [];
     if (!metricFilter) return selectedPerformance.analysis.events;
+
     return selectedPerformance.analysis.events.filter(e => {
       const type = e.type.toLowerCase();
       switch (metricFilter) {
-        case 'goals': return type.includes('goal') && !type.includes('own');
+        case 'goals': return type.includes('goal');
         case 'assists': return type.includes('assist');
         case 'passes': return type.includes('pass');
         case 'shots': return type.includes('shot');
-        case 'duels': return type.includes('duel') || type.includes('challenge') || type.includes('tackle');
+        case 'keyPasses': return type.includes('key') || type.includes('decisivo');
+        case 'duels': return type.includes('duel') || type.includes('challenge');
+        case 'interceptions': return type.includes('interception') || type.includes('recovery');
+        case 'tackles': return type.includes('tackle') || type.includes('desarme');
         default: return true;
       }
     });
   }, [selectedPerformance, metricFilter]);
-
-
-  // --- RENDERIZAÇÃO DAS TELAS ---
 
   const renderHome = () => (
     <div className="h-[70vh] flex items-center justify-center">
@@ -260,45 +252,231 @@ const App: React.FC = () => {
         <div className="w-20 h-20 bg-emerald-500/10 rounded-3xl flex items-center justify-center mx-auto mb-6 text-emerald-500 border border-emerald-500/20">
           <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" strokeWidth="1.5"/></svg>
         </div>
-        <h3 className="text-2xl font-black text-white mb-3">Scout Cloud Pro</h3>
-        <p className="text-slate-500 mb-8 font-medium">Seus dados agora estão centralizados. Comece cadastrando os atletas do seu clube.</p>
+        <h3 className="text-2xl font-black text-white mb-3">Scout Pro Cloud</h3>
+        <p className="text-slate-500 mb-8 font-medium italic">Seus dados agora estão seguros na nuvem Supabase.</p>
         <div className="flex gap-4 justify-center">
-          <button onClick={() => setCurrentPage('player')} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg shadow-emerald-500/20">Novo Jogador</button>
+          <button onClick={() => setCurrentPage('player')} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">Novo Jogador</button>
           <button onClick={() => setCurrentPage('game')} className="px-8 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all border border-white/5">Nova Partida</button>
         </div>
       </div>
     </div>
   );
 
-  const renderRegisterPlayer = () => (
-    <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4">
-      <div className="bg-slate-900/60 p-10 rounded-[3rem] border border-white/5 backdrop-blur-xl">
-        <h3 className="text-3xl font-black text-white mb-8">Cadastrar Jogador</h3>
-        <div className="space-y-6">
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-black uppercase text-slate-500">Nome Completo</label>
-            <input type="text" className="bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50" placeholder="Ex: Caio Matheus" value={newPlayer.name} onChange={(e) => setNewPlayer(p => ({ ...p, name: e.target.value }))} />
+  const renderRoster = () => (
+    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-3xl font-black text-white tracking-tight italic uppercase">Elenco</h3>
+          <p className="text-slate-500 font-medium italic">Gestão de atletas e importação de XML.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {dataLoading ? (
+           <div className="col-span-full py-20 text-center animate-pulse text-slate-500 font-black uppercase tracking-widest">Carregando Banco de Dados...</div>
+        ) : players.length === 0 ? (
+          <div className="col-span-full py-20 text-center text-slate-500 italic">Nenhum atleta cadastrado.</div>
+        ) : players.map(player => {
+          const playerGameId = rosterGameSelection[player.id] || "";
+          const hasPerformance = performances.some(p => p.playerId === player.id && p.gameId === playerGameId);
+
+          return (
+            <div key={player.id} className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl group hover:border-emerald-500/30 transition-all flex flex-col relative">
+              <button onClick={() => deletePlayer(player.id)} className="absolute top-4 right-4 p-2 text-slate-700 hover:text-red-500 transition-colors z-10">
+                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              </button>
+              <div className="flex items-center gap-5 mb-6">
+                <div className="w-16 h-16 rounded-2xl bg-slate-800 overflow-hidden border border-white/5 flex-shrink-0">
+                  {player.photoUrl ? <img src={player.photoUrl} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-700"><svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg></div>}
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-lg font-black text-white uppercase truncate">{player.name}</h4>
+                  <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">{player.position}</p>
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/40 p-5 rounded-2xl border border-white/5 space-y-4">
+                <select 
+                  className="w-full bg-slate-900 border border-white/5 rounded-xl px-3 py-2 text-xs text-white outline-none focus:ring-1 focus:ring-emerald-500/50"
+                  value={playerGameId}
+                  onChange={(e) => setRosterGameSelection(prev => ({ ...prev, [player.id]: e.target.value }))}
+                >
+                  <option value="">Selecione o jogo...</option>
+                  {games.map(game => <option key={game.id} value={game.id}>{game.homeTeam} x {game.awayTeam}</option>)}
+                </select>
+
+                <div className="space-y-2">
+                  {hasPerformance ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-center gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 font-black text-[10px] uppercase">
+                        ✓ Dados Importados
+                      </div>
+                      <label className="flex items-center justify-center gap-2 p-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all cursor-pointer font-black text-[9px] uppercase text-slate-400 hover:text-white">
+                        {loading ? 'Lendo...' : 'Substituir XML'}
+                        <input type="file" accept=".xml" className="hidden" disabled={loading} onChange={(e) => handlePerformanceUpload(e, player.id, playerGameId)} />
+                      </label>
+                    </div>
+                  ) : (
+                    <label className={`flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed transition-all cursor-pointer font-black text-[10px] uppercase ${playerGameId ? 'border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/5' : 'border-slate-800 text-slate-600 opacity-50'}`}>
+                      {loading ? 'Lendo XML...' : 'Importar Scout XML'}
+                      <input type="file" accept=".xml" className="hidden" disabled={!playerGameId || loading} onChange={(e) => handlePerformanceUpload(e, player.id, playerGameId)} />
+                    </label>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const renderAnalytics = () => {
+    const sortedGames = [...games].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const playersInSelectedGame = players.filter(pl => performances.some(p => p.gameId === selectedGameId && p.playerId === pl.id));
+
+    return (
+      <div className="space-y-6">
+        <div className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 shadow-2xl items-end">
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Partida</label>
+            <div className="flex gap-2">
+              <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={selectedGameId || ''} onChange={(e) => { setSelectedGameId(e.target.value); setSelectedPlayerId(null); }}>
+                <option value="">Escolha o jogo...</option>
+                {sortedGames.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam} ({g.date})</option>)}
+              </select>
+              {selectedGameId && (
+                <button onClick={() => deleteGame(selectedGameId)} className="p-3 bg-red-500/10 text-red-500 rounded-2xl border border-red-500/20 hover:bg-red-500/20 transition-all">
+                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-black uppercase text-slate-500">Posição</label>
-            <select className="bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white appearance-none" value={newPlayer.position} onChange={(e) => setNewPlayer(p => ({ ...p, position: e.target.value }))}>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Atleta</label>
+            <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none focus:ring-1 focus:ring-emerald-500/50" disabled={!selectedGameId} value={selectedPlayerId || ''} onChange={(e) => setSelectedPlayerId(e.target.value)}>
+              <option value="">Escolha o atleta...</option>
+              {playersInSelectedGame.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2">
+             <button onClick={() => window.print()} disabled={!selectedPerformance} className="flex-grow bg-white text-slate-900 font-black py-3 rounded-2xl text-[10px] uppercase tracking-widest disabled:opacity-20 hover:bg-slate-100 transition-all">Exportar PDF</button>
+             {selectedPerformance && (
+               <button onClick={() => setShowAIModal(true)} className="bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20">
+                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                 IA
+               </button>
+             )}
+          </div>
+        </div>
+
+        {selectedPerformance ? (
+          <div className="space-y-6 animate-in fade-in duration-700">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-7">
+                  <div className="bg-slate-900/40 p-1 rounded-[2.5rem] border border-white/5 overflow-hidden sticky top-24">
+                    <PitchHeatmap events={filteredEvents} intensity={15} />
+                  </div>
+                </div>
+
+                <div className="lg:col-span-5 space-y-4">
+                  <div className="bg-slate-900/60 p-6 rounded-[2.5rem] border border-white/5">
+                    <h4 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+                      Scout Detalhado
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <StatCard label="Gols" value={selectedPerformance.analysis.stats.goals} icon={<span className="text-[10px] font-black">⚽</span>} color="bg-emerald-500/20 text-emerald-500" isActive={metricFilter === 'goals'} onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')} />
+                      <StatCard label="Assistências" value={selectedPerformance.analysis.stats.assists} icon={<span className="text-[10px] font-black">🎯</span>} color="bg-blue-500/20 text-blue-500" isActive={metricFilter === 'assists'} onClick={() => setMetricFilter(metricFilter === 'assists' ? null : 'assists')} />
+                      <StatCard label="Passes Decisivos" value={selectedPerformance.analysis.stats.keyPasses} icon={<span className="text-[10px] font-black">🔑</span>} color="bg-yellow-500/20 text-yellow-500" isActive={metricFilter === 'keyPasses'} onClick={() => setMetricFilter(metricFilter === 'keyPasses' ? null : 'keyPasses')} />
+                      <StatCard label="Total de Passes" value={selectedPerformance.analysis.stats.passes} suffix={`(${selectedPerformance.analysis.stats.passAccuracy.toFixed(0)}%)`} icon={<span className="text-[10px] font-black">P</span>} color="bg-slate-700/50 text-white" isActive={metricFilter === 'passes'} onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')} />
+                      <StatCard label="Total de Duelos" value={selectedPerformance.analysis.stats.duels} icon={<span className="text-[10px] font-black">Σ</span>} color="bg-slate-800/80 text-slate-400" />
+                      <StatCard label="Duelos Vencidos" value={selectedPerformance.analysis.stats.duelsWon} icon={<span className="text-[10px] font-black">⚔️</span>} color="bg-red-500/20 text-red-500" isActive={metricFilter === 'duels'} onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')} />
+                      <StatCard label="Chutes (Alvo/Total)" value={`${selectedPerformance.analysis.stats.shotsOnTarget}/${selectedPerformance.analysis.stats.shots}`} icon={<span className="text-[10px] font-black">⚡</span>} color="bg-orange-500/20 text-orange-500" isActive={metricFilter === 'shots'} onClick={() => setMetricFilter(metricFilter === 'shots' ? null : 'shots')} />
+                      <StatCard label="Interceptações" value={selectedPerformance.analysis.stats.interceptions} icon={<span className="text-[10px] font-black">🛡️</span>} color="bg-purple-500/20 text-purple-500" isActive={metricFilter === 'interceptions'} onClick={() => setMetricFilter(metricFilter === 'interceptions' ? null : 'interceptions')} />
+                      <StatCard label="Desarmes" value={selectedPerformance.analysis.stats.tackles} icon={<span className="text-[10px] font-black">🧤</span>} color="bg-cyan-500/20 text-cyan-500" isActive={metricFilter === 'tackles'} onClick={() => setMetricFilter(metricFilter === 'tackles' ? null : 'tackles')} />
+                      <div className="bg-emerald-500/10 p-5 rounded-[1.5rem] border border-emerald-500/20 flex flex-col justify-center">
+                         <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest mb-1">RATING FINAL</span>
+                         <span className="text-3xl font-black text-white italic">{selectedPerformance.analysis.stats.rating.toFixed(1)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+            </div>
+          </div>
+        ) : <p className="text-center py-20 text-slate-500 italic font-medium">Selecione uma partida e um atleta para ver a análise completa.</p>}
+      </div>
+    );
+  };
+
+  const renderAIModal = () => {
+    if (!selectedPerformance || !showAIModal) return null;
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-300">
+        <div className="bg-slate-900 border border-white/10 w-full max-w-2xl rounded-[3rem] overflow-hidden shadow-2xl animate-in zoom-in-95 duration-300">
+          <div className="p-8 border-b border-white/5 flex items-center justify-between bg-slate-800/20">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-emerald-500 flex flex-col items-center justify-center text-white font-black">
+                <span className="text-[6px] uppercase leading-none">NOTA</span>
+                <span className="text-lg italic leading-none">{selectedPerformance.analysis.stats.rating.toFixed(1)}</span>
+              </div>
+              <div>
+                <h3 className="text-xl font-black text-white uppercase italic leading-none">{selectedPerformance.analysis.player.name}</h3>
+                <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mt-1">Scout Profissional IA</p>
+              </div>
+            </div>
+            <button onClick={() => setShowAIModal(false)} className="p-3 rounded-full hover:bg-white/5 text-slate-400 transition-all">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" strokeWidth="2.5" strokeLinecap="round"/></svg>
+            </button>
+          </div>
+          <div className="p-10 max-h-[60vh] overflow-y-auto">
+            <div className="prose prose-invert max-w-none text-slate-300 font-medium leading-relaxed whitespace-pre-line text-sm italic">
+              {selectedPerformance.analysis.aiInsights}
+            </div>
+          </div>
+          <div className="p-6 bg-slate-800/10 border-t border-white/5 text-center">
+             <button onClick={() => setShowAIModal(false)} className="px-10 py-3 bg-white text-slate-900 font-black rounded-2xl uppercase text-[10px] tracking-widest hover:bg-slate-100 transition-all">Fechar Relatório</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderRegisterPlayer = () => (
+    <div className="max-w-xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 backdrop-blur-xl">
+        <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Novo Atleta</h3>
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Nome</label>
+            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Lucas Silva" value={newPlayer.name} onChange={(e) => setNewPlayer(p => ({ ...p, name: e.target.value }))} />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Posição</label>
+            <select className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newPlayer.position} onChange={(e) => setNewPlayer(p => ({ ...p, position: e.target.value }))}>
               <option>Goleiro</option><option>Zagueiro</option><option>Lateral</option><option>Meio-Campista</option><option>Extremo</option><option>Atacante</option>
             </select>
           </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-black uppercase text-slate-500">Foto do Atleta</label>
-            <div className="flex items-center gap-6">
-              <div className="w-24 h-24 rounded-2xl bg-slate-800 overflow-hidden border border-white/5 shadow-inner">
-                {newPlayer.photoUrl ? <img src={newPlayer.photoUrl} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-600"><svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" strokeWidth="2" /></svg></div>}
-              </div>
-              <label className="bg-white/10 hover:bg-white/20 px-6 py-3 rounded-xl text-sm font-bold cursor-pointer border border-white/5 transition-all">
-                {loading ? 'Subindo...' : 'Escolher Foto'}
-                <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={loading} />
+          
+          <div className="flex items-center gap-6 bg-slate-800/30 p-4 rounded-2xl border border-white/5">
+            <div className="w-20 h-20 rounded-xl bg-slate-800 overflow-hidden flex-shrink-0 border border-white/5">
+              {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-600"><svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z"/></svg></div>}
+            </div>
+            <div className="flex-grow">
+              <label className="block w-full bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer transition-all text-emerald-400">
+                {selectedPhotoFile ? 'Trocar Foto' : 'Anexar Foto (Bucket)'}
+                <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
               </label>
+              <p className="text-[8px] text-slate-500 mt-2 italic">* O bucket 'player-photos' deve ser público no Supabase.</p>
             </div>
           </div>
-          <button onClick={savePlayer} disabled={loading} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm disabled:opacity-50">
-            {loading ? 'Salvando...' : 'Finalizar Cadastro'}
+
+          <button 
+            onClick={savePlayer} 
+            disabled={loading || !newPlayer.name}
+            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm mt-4 shadow-lg shadow-emerald-600/20 transition-all"
+          >
+            {loading ? 'Salvando...' : 'Salvar Cadastro'}
           </button>
         </div>
       </div>
@@ -306,213 +484,72 @@ const App: React.FC = () => {
   );
 
   const renderRegisterGame = () => (
-    <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4">
-      <div className="bg-slate-900/60 p-10 rounded-[3rem] border border-white/5 backdrop-blur-xl">
-        <h3 className="text-3xl font-black text-white mb-8">Cadastrar Partida</h3>
-        <div className="space-y-6">
-          <div className="grid grid-cols-2 gap-6">
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-black uppercase text-slate-500">Time da Casa</label>
-              <input type="text" className="bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50" placeholder="Ex: Porto Vitória" value={newGame.homeTeam} onChange={(e) => setNewGame(p => ({ ...p, homeTeam: e.target.value }))} />
+    <div className="max-w-xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 backdrop-blur-xl">
+        <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Registrar Partida</h3>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Time Casa</label>
+              <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Porto" value={newGame.homeTeam} onChange={(e) => setNewGame(g => ({ ...g, homeTeam: e.target.value }))} />
             </div>
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-black uppercase text-slate-500">Visitante</label>
-              <input type="text" className="bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50" placeholder="Ex: Flamengo" value={newGame.awayTeam} onChange={(e) => setNewGame(p => ({ ...p, awayTeam: e.target.value }))} />
+            <div className="space-y-1">
+              <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Time Fora</label>
+              <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Benfica" value={newGame.awayTeam} onChange={(e) => setNewGame(g => ({ ...g, awayTeam: e.target.value }))} />
             </div>
           </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-black uppercase text-slate-500">Data da Partida</label>
-            <input type="date" className="bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50" value={newGame.date} onChange={(e) => setNewGame(p => ({ ...p, date: e.target.value }))} />
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Data</label>
+            <input type="date" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newGame.date} onChange={(e) => setNewGame(g => ({ ...g, date: e.target.value }))} />
           </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-black uppercase text-slate-500">Competição</label>
-            <input type="text" className="bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50" placeholder="Ex: Copa São Paulo" value={newGame.competition} onChange={(e) => setNewGame(p => ({ ...p, competition: e.target.value }))} />
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-emerald-500 uppercase px-4">Competição</label>
+            <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Ex: Campeonato Estadual" value={newGame.competition} onChange={(e) => setNewGame(g => ({ ...g, competition: e.target.value }))} />
           </div>
-          <button onClick={saveGame} disabled={loading} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm disabled:opacity-50 transition-all shadow-lg shadow-emerald-500/20">
-            {loading ? 'Salvando...' : 'Agendar Partida'}
+          <button 
+            onClick={saveGame} 
+            disabled={loading || !newGame.homeTeam || !newGame.awayTeam}
+            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm mt-4 shadow-lg shadow-emerald-600/20 transition-all"
+          >
+            {loading ? 'Salvando...' : 'Criar Registro'}
           </button>
         </div>
       </div>
     </div>
   );
 
-  const renderRoster = () => (
-    <div className="space-y-8 animate-in fade-in">
-        <div className="flex items-center justify-between mb-8">
-            <h2 className="text-3xl font-black text-white">Elenco Atual</h2>
-            <div className="px-4 py-2 bg-slate-800 rounded-xl text-xs font-bold text-slate-400">
-                {players.length} Atletas
-            </div>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {players.map(player => (
-                <div key={player.id} className="group bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 hover:border-emerald-500/30 hover:bg-slate-800/80 transition-all cursor-pointer">
-                    <div className="relative w-full aspect-square mb-4 rounded-2xl overflow-hidden bg-slate-800">
-                        {player.photoUrl ? (
-                             <img src={player.photoUrl} alt={player.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
-                        ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-600">
-                                <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" strokeWidth="2" /></svg>
-                            </div>
-                        )}
-                        <div className="absolute top-3 right-3 bg-emerald-500 text-white text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-wider">
-                            {player.position.slice(0, 3)}
-                        </div>
-                    </div>
-                    <h3 className="text-lg font-bold text-white mb-1 group-hover:text-emerald-400 transition-colors">{player.name}</h3>
-                    <p className="text-xs text-slate-500 font-medium uppercase tracking-widest">{player.position}</p>
-                </div>
-            ))}
-        </div>
-    </div>
-  );
-
-  const renderAnalytics = () => (
-    <div className="space-y-6 animate-in fade-in">
-        <div className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl flex flex-col lg:flex-row items-center gap-6 justify-between">
-            <div className="flex gap-4 w-full lg:w-auto">
-                <select 
-                    value={selectedPlayerId} 
-                    onChange={(e) => setSelectedPlayerId(e.target.value)}
-                    className="bg-slate-800 border border-white/5 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500/50 outline-none w-full lg:w-64"
-                >
-                    <option value="">Selecione o Atleta</option>
-                    {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-
-                <select 
-                    value={selectedGameId} 
-                    onChange={(e) => setSelectedGameId(e.target.value)}
-                    className="bg-slate-800 border border-white/5 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500/50 outline-none w-full lg:w-64"
-                >
-                    <option value="">Selecione a Partida</option>
-                    {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} vs {g.awayTeam}</option>)}
-                </select>
-            </div>
-
-            <label className={`flex items-center gap-3 px-6 py-3 rounded-xl border border-dashed transition-all cursor-pointer ${selectedPlayerId && selectedGameId ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' : 'bg-slate-800/50 border-white/5 text-slate-500 cursor-not-allowed'}`}>
-                <Share2 className="w-4 h-4" />
-                <span className="text-xs font-bold uppercase tracking-widest">{loading ? 'Processando XML...' : 'Importar Scout (XML)'}</span>
-                <input 
-                    type="file" 
-                    accept=".xml" 
-                    onChange={handlePerformanceUpload} 
-                    disabled={loading || !selectedPlayerId || !selectedGameId}
-                    className="hidden" 
-                />
-            </label>
-        </div>
-
-        {selectedPerformance ? (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[800px]">
-                <div className="lg:col-span-2 bg-slate-900/60 p-6 rounded-[2.5rem] border border-white/5 backdrop-blur-xl flex flex-col relative overflow-hidden">
-                    <div className="flex justify-between items-center mb-6 z-10">
-                        <div>
-                            <h3 className="text-2xl font-black text-white flex items-center gap-3">
-                                <Target className="w-6 h-6 text-emerald-500" />
-                                Mapa de Calor
-                            </h3>
-                            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-1">
-                                {metricFilter ? `Filtrando: ${metricFilter}` : 'Todas as ações'}
-                            </p>
-                        </div>
-                        <input 
-                            type="range" 
-                            min="5" max="50" 
-                            value={heatmapIntensity} 
-                            onChange={(e) => setHeatmapIntensity(Number(e.target.value))}
-                            className="w-32 accent-emerald-500" 
-                        />
-                    </div>
-                    <div className="flex-grow relative rounded-2xl overflow-hidden border border-white/5 bg-[#1a2e26]">
-                         <PitchHeatmap events={filteredEvents} intensity={heatmapIntensity} />
-                    </div>
-                </div>
-
-                <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar">
-                     <div className="bg-emerald-500 p-6 rounded-[2rem] text-white shadow-lg shadow-emerald-500/20 mb-6">
-                        <div className="flex items-center gap-3 mb-2">
-                            <Activity className="w-5 h-5 opacity-80" />
-                            <span className="text-xs font-black uppercase tracking-widest opacity-80">AI RATING</span>
-                        </div>
-                        <div className="text-6xl font-black tracking-tighter">{selectedPerformance.analysis.stats.rating.toFixed(1)}</div>
-                     </div>
-
-                     <StatCard 
-                        label="Passes Certos" 
-                        value={selectedPerformance.analysis.stats.passesAccurate} 
-                        suffix={`/ ${selectedPerformance.analysis.stats.passes}`}
-                        icon={<Share2 className="w-4 h-4 text-white" />}
-                        color="bg-blue-500"
-                        isActive={metricFilter === 'passes'}
-                        onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')}
-                     />
-                     <StatCard 
-                        label="Finalizações" 
-                        value={selectedPerformance.analysis.stats.shots} 
-                        suffix={`(${selectedPerformance.analysis.stats.shotsOnTarget} no alvo)`}
-                        icon={<Target className="w-4 h-4 text-white" />}
-                        color="bg-red-500"
-                        isActive={metricFilter === 'shots'}
-                        onClick={() => setMetricFilter(metricFilter === 'shots' ? null : 'shots')}
-                     />
-                     <StatCard 
-                        label="Duelos Ganhos" 
-                        value={selectedPerformance.analysis.stats.duelsWon} 
-                        suffix={`/ ${selectedPerformance.analysis.stats.duels}`}
-                        icon={<Shield className="w-4 h-4 text-white" />}
-                        color="bg-amber-500"
-                        isActive={metricFilter === 'duels'}
-                        onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')}
-                     />
-                     <StatCard 
-                        label="Gols" 
-                        value={selectedPerformance.analysis.stats.goals} 
-                        icon={<Activity className="w-4 h-4 text-white" />}
-                        color="bg-emerald-500"
-                        isActive={metricFilter === 'goals'}
-                        onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')}
-                     />
-                </div>
-            </div>
-        ) : (
-            <div className="flex flex-col items-center justify-center h-96 bg-slate-900/40 border-2 border-dashed border-slate-800 rounded-[3rem]">
-                <MousePointer2 className="w-12 h-12 text-slate-600 mb-4" />
-                <h3 className="text-xl font-bold text-slate-400">Selecione um Atleta e uma Partida</h3>
-                <p className="text-slate-600">Ou faça o upload de um novo arquivo XML</p>
-            </div>
-        )}
-    </div>
-  );
-
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-200 flex overflow-hidden font-inter">
+      {renderAIModal()}
       <aside className={`border-r border-white/5 bg-slate-900/40 backdrop-blur-md flex flex-col sticky top-0 h-screen transition-all duration-300 ${isSidebarOpen ? 'w-64' : 'w-0 overflow-hidden'}`}>
         <div className="p-7 w-64">
           <div className="flex items-center gap-3 mb-12">
-            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center"><svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" strokeWidth="2.5" /></svg></div>
-            <h1 className="text-lg font-black text-white italic uppercase">Scout Cloud</h1>
+            <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/20"><svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" strokeWidth="2.5" /></svg></div>
+            <h1 className="text-lg font-black text-white italic tracking-tighter uppercase leading-none">Scout<br/>Pro</h1>
           </div>
-          <nav className="space-y-1.5">
-            <button onClick={() => setCurrentPage('home')} className={`w-full flex px-4 py-3 rounded-xl text-[11px] font-black uppercase ${currentPage === 'home' ? 'bg-emerald-500 text-white' : 'text-slate-400'}`}>HOME</button>
-            <button onClick={() => setCurrentPage('player')} className={`w-full flex px-4 py-3 rounded-xl text-[11px] font-black uppercase ${currentPage === 'player' ? 'bg-emerald-500 text-white' : 'text-slate-400'}`}>Novo Atleta</button>
-            <button onClick={() => setCurrentPage('game')} className={`w-full flex px-4 py-3 rounded-xl text-[11px] font-black uppercase ${currentPage === 'game' ? 'bg-emerald-500 text-white' : 'text-slate-400'}`}>Nova Partida</button>
-            <button onClick={() => setCurrentPage('roster')} className={`w-full flex px-4 py-3 rounded-xl text-[11px] font-black uppercase ${currentPage === 'roster' ? 'bg-emerald-500 text-white' : 'text-slate-400'}`}>ELENCO</button>
-            <button onClick={() => setCurrentPage('analytics')} className={`w-full flex px-4 py-3 rounded-xl text-[11px] font-black uppercase ${currentPage === 'analytics' ? 'bg-emerald-500 text-white' : 'text-slate-400'}`}>DADOS</button>
+          <nav className="space-y-1">
+            <button onClick={() => setCurrentPage('home')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'home' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Início</button>
+            <button onClick={() => setCurrentPage('roster')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'roster' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Elenco</button>
+            <button onClick={() => setCurrentPage('analytics')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'analytics' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Análises</button>
+            <div className="pt-6 pb-2 px-4 text-[8px] font-black text-slate-600 uppercase tracking-widest">Registros</div>
+            <button onClick={() => setCurrentPage('player')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'player' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Atleta</button>
+            <button onClick={() => setCurrentPage('game')} className={`w-full flex px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${currentPage === 'game' ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:bg-white/5'}`}>Novo Jogo</button>
           </nav>
         </div>
       </aside>
 
       <div className="flex-grow flex flex-col h-screen overflow-y-auto">
-        {successMessage && <div className="fixed top-6 right-6 z-[60] animate-in slide-in-from-right-8 fade-in"><div className="bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl font-bold">{successMessage}</div></div>}
-        
-        <header className="h-20 border-b border-white/5 flex items-center px-10 bg-slate-900/20 backdrop-blur-sm sticky top-0 z-40">
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors">
+        {successMessage && <div className="fixed top-6 right-6 z-[110] animate-in slide-in-from-right-8 fade-in"><div className="bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl font-bold flex items-center gap-2">✓ {successMessage}</div></div>}
+        <header className="h-16 border-b border-white/5 flex items-center px-10 bg-slate-900/20 backdrop-blur-sm sticky top-0 z-40">
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h8m-8 6h16" strokeWidth="2.5"/></svg>
           </button>
+          <div className="ml-auto text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+            Sistema Ativo
+          </div>
         </header>
-        
-        <main className="p-8">
+        <main className="p-8 pb-20">
           {currentPage === 'home' && renderHome()}
           {currentPage === 'player' && renderRegisterPlayer()}
           {currentPage === 'game' && renderRegisterGame()}
