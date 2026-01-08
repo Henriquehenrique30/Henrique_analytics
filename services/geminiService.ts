@@ -5,7 +5,7 @@ import { PlayerStats, PlayerInfo } from "../types";
 export interface AIAnalysisResult { report: string; rating: number; }
 
 export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerStats): Promise<AIAnalysisResult> => {
-  // Inicialização obrigatória conforme diretrizes
+  // A API Key é obtida de process.env.API_KEY, injetada pela configuração do Vite
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const prompt = `
@@ -34,7 +34,6 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
       contents: prompt,
     });
     
-    // Acesso direto à propriedade .text (não é um método)
     const text = response.text || "";
     let rating = 6.0;
     
@@ -50,7 +49,7 @@ export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerSt
       rating: rating
     };
   } catch (error: any) {
-    console.error("AI Error:", error);
+    console.error("Erro na API Gemini:", error);
     throw error;
   }
 };
