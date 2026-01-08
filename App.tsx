@@ -23,7 +23,7 @@ const App: React.FC = () => {
   const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
   const [metricFilter, setMetricFilter] = useState<MetricFilter>(null);
   const [rosterGameSelection, setRosterGameSelection] = useState<Record<string, string>>({});
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
@@ -35,9 +35,14 @@ const App: React.FC = () => {
   const fetchData = async () => {
     setDataLoading(true);
     try {
-      const { data: pData } = await supabase.from('players').select('*').order('name');
-      const { data: gData } = await supabase.from('games').select('*').order('date', { ascending: false });
-      const { data: perfData } = await supabase.from('performances').select('*');
+      const { data: pData, error: pError } = await supabase.from('players').select('*').order('name');
+      if (pError) throw pError;
+      
+      const { data: gData, error: gError } = await supabase.from('games').select('*').order('date', { ascending: false });
+      if (gError) throw gError;
+      
+      const { data: perfData, error: perfError } = await supabase.from('performances').select('*');
+      if (perfError) throw perfError;
       
       if (pData) setPlayers(pData.map((p: any) => ({ ...p, photoUrl: p.photo_url })));
       if (gData) setGames(gData.map((g: any) => ({ 
@@ -46,8 +51,9 @@ const App: React.FC = () => {
       if (perfData) setPerformances(perfData.map((p: any) => ({
         id: p.id, playerId: p.player_id, gameId: p.game_id, analysis: p.analysis
       })));
-    } catch (error) {
+    } catch (error: any) {
       console.error("Erro ao carregar dados:", error);
+      showNotification(`Falha de conexão: ${error.message}`, 'error');
     } finally {
       setDataLoading(false);
     }
@@ -55,9 +61,9 @@ const App: React.FC = () => {
 
   useEffect(() => { fetchData(); }, []);
 
-  const showNotification = (msg: string) => {
-    setSuccessMessage(msg);
-    setTimeout(() => setSuccessMessage(null), 4000);
+  const showNotification = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotification({ msg, type });
+    setTimeout(() => setNotification(null), 5000);
   };
 
   const handlePerformanceUpload = async (e: React.ChangeEvent<HTMLInputElement>, playerId: string, gameId: string) => {
@@ -71,9 +77,8 @@ const App: React.FC = () => {
         const json = JSON.parse(event.target?.result as string);
         const { events, stats: parsedStats } = parseFootballJSON(json);
         const player = players.find(p => p.id === playerId);
-        if (!player) throw new Error("Atleta não encontrado");
+        if (!player) throw new Error("Atleta não encontrado no banco de dados.");
 
-        // Gerar análise de IA imediatamente na importação ou via botão depois
         const aiResult = await generateScoutingReport(player, parsedStats);
         
         const analysisData = {
@@ -95,10 +100,10 @@ const App: React.FC = () => {
           ...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), 
           { id: data[0].id, playerId: data[0].player_id, gameId: data[0].game_id, analysis: data[0].analysis }
         ]);
-        showNotification("Desempenho JSON processado com sucesso!");
-      } catch (err) {
+        showNotification("Desempenho sincronizado com sucesso!");
+      } catch (err: any) {
         console.error(err);
-        showNotification("Erro ao processar arquivo JSON.");
+        showNotification(`Erro no processamento: ${err.message}`, 'error');
       } finally {
         setLoading(false);
         if (e.target) e.target.value = '';
@@ -113,26 +118,36 @@ const App: React.FC = () => {
     try {
       let photoUrl = null;
       if (selectedPhotoFile) {
-        const fileName = `${Date.now()}_${selectedPhotoFile.name}`;
+        const fileName = `${Date.now()}_${selectedPhotoFile.name.replace(/\s/g, '_')}`;
         const { error: upErr } = await supabase.storage.from('player-photos').upload(fileName, selectedPhotoFile);
-        if (!upErr) {
-          const { data } = supabase.storage.from('player-photos').getPublicUrl(fileName);
-          photoUrl = data.publicUrl;
+        if (upErr) {
+            console.error("Erro upload storage:", upErr);
+        } else {
+            const { data } = supabase.storage.from('player-photos').getPublicUrl(fileName);
+            photoUrl = data.publicUrl;
         }
       }
+      
       const { data, error } = await supabase.from('players').insert([{
         name: newPlayer.name,
         photo_url: photoUrl,
         position: newPlayer.position
       }]).select();
+      
       if (error) throw error;
-      setPlayers(prev => [...prev, { ...data[0], photoUrl: data[0].photo_url }]);
-      setCurrentPage('roster');
-      showNotification("Atleta cadastrado!");
-      setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
-      setPhotoPreview(null);
-      setSelectedPhotoFile(null);
-    } catch (e) { showNotification("Erro ao cadastrar atleta."); }
+      
+      if (data) {
+        setPlayers(prev => [...prev, { ...data[0], photoUrl: data[0].photo_url }]);
+        setCurrentPage('roster');
+        showNotification("Atleta cadastrado com sucesso!");
+        setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
+        setPhotoPreview(null);
+        setSelectedPhotoFile(null);
+      }
+    } catch (e: any) { 
+      console.error("Erro savePlayer:", e);
+      showNotification(`Erro ao cadastrar atleta: ${e.message}`, 'error'); 
+    }
     setLoading(false);
   };
 
@@ -146,12 +161,19 @@ const App: React.FC = () => {
         date: newGame.date,
         competition: newGame.competition
       }]).select();
+      
       if (error) throw error;
-      setGames(prev => [{ id: data[0].id, homeTeam: data[0].home_team, awayTeam: data[0].away_team, date: data[0].date, competition: data[0].competition }, ...prev]);
-      setCurrentPage('analytics');
-      showNotification("Partida registrada!");
-      setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
-    } catch (e) { showNotification("Erro ao registrar jogo."); }
+      
+      if (data) {
+        setGames(prev => [{ id: data[0].id, homeTeam: data[0].home_team, awayTeam: data[0].away_team, date: data[0].date, competition: data[0].competition }, ...prev]);
+        setCurrentPage('analytics');
+        showNotification("Partida registrada com sucesso!");
+        setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
+      }
+    } catch (e: any) { 
+      console.error("Erro saveGame:", e);
+      showNotification(`Erro ao registrar partida: ${e.message}`, 'error'); 
+    }
     setLoading(false);
   };
 
@@ -209,15 +231,19 @@ const App: React.FC = () => {
       </aside>
 
       <div className="flex-grow flex flex-col h-screen overflow-y-auto">
-        {successMessage && <div className="fixed top-8 right-8 z-[110] bg-emerald-500 text-white px-8 py-4 rounded-2xl shadow-2xl font-black text-xs uppercase tracking-widest animate-in slide-in-from-right-8 duration-500">✓ {successMessage}</div>}
+        {notification && (
+          <div className={`fixed top-8 right-8 z-[110] px-8 py-4 rounded-2xl shadow-2xl font-black text-xs uppercase tracking-widest animate-in slide-in-from-right-8 duration-500 ${notification.type === 'error' ? 'bg-red-500 text-white' : 'bg-emerald-500 text-white'}`}>
+            {notification.type === 'error' ? '✖ ' : '✓ '} {notification.msg}
+          </div>
+        )}
         
         <header className="h-16 border-b border-white/5 flex items-center px-10 bg-slate-900/20 backdrop-blur-md sticky top-0 z-40">
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-slate-800 text-slate-400 rounded-lg hover:text-white transition-all">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h8m-8 6h16" strokeWidth="2.5"/></svg>
           </button>
           <div className="ml-auto flex items-center gap-4">
-             <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Database Sync Ativo</span>
-             <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+             <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Status do Banco de Dados</span>
+             <div className={`w-2 h-2 rounded-full animate-pulse ${dataLoading ? 'bg-yellow-500' : 'bg-emerald-500'}`}></div>
           </div>
         </header>
 
@@ -225,18 +251,18 @@ const App: React.FC = () => {
           {currentPage === 'home' && (
              <div className="h-[70vh] flex items-center justify-center">
                <div className="text-center p-12 bg-slate-900/40 border-2 border-dashed border-slate-800 rounded-[3rem] max-w-xl">
-                 <h3 className="text-2xl font-black text-white mb-3">Bem-vindo ao Scout Pro</h3>
-                 <p className="text-slate-500 mb-8 italic">Gerencie seu elenco e analise o desempenho individual através de arquivos JSON.</p>
-                 <button onClick={() => setCurrentPage('roster')} className="px-10 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">Ver Elenco</button>
+                 <h3 className="text-2xl font-black text-white mb-3">SISTEMA DE ANÁLISE PROFISSIONAL</h3>
+                 <p className="text-slate-500 mb-8 italic">Gerencie atletas e gere heatmaps a partir de scouts JSON.</p>
+                 <button onClick={() => setCurrentPage('roster')} className="px-10 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">Começar Análise</button>
                </div>
              </div>
           )}
 
           {currentPage === 'player' && (
             <div className="max-w-xl mx-auto bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
-              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Novo Atleta</h3>
+              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Cadastro de Atleta</h3>
               <div className="space-y-4">
-                <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Nome Completo" value={newPlayer.name} onChange={e => setNewPlayer({...newPlayer, name: e.target.value})} />
+                <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Nome do Jogador" value={newPlayer.name} onChange={e => setNewPlayer({...newPlayer, name: e.target.value})} />
                 <select className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newPlayer.position} onChange={e => setNewPlayer({...newPlayer, position: e.target.value})}>
                   <option>Goleiro</option><option>Zagueiro</option><option>Lateral</option><option>Meio-Campista</option><option>Extremo</option><option>Atacante</option>
                 </select>
@@ -245,7 +271,7 @@ const App: React.FC = () => {
                     {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" alt="Preview" /> : <div className="w-full h-full flex items-center justify-center text-slate-700 font-black text-[8px] uppercase text-center p-2">Sem Foto</div>}
                   </div>
                   <label className="flex-grow bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer text-emerald-400 hover:bg-emerald-500/20 transition-all">
-                    Upload Foto
+                    Upload Foto (PNG/JPG)
                     <input type="file" accept="image/*" className="hidden" onChange={e => {
                       const f = e.target.files?.[0];
                       if(f) { setSelectedPhotoFile(f); setPhotoPreview(URL.createObjectURL(f)); }
@@ -253,7 +279,7 @@ const App: React.FC = () => {
                   </label>
                 </div>
                 <button onClick={savePlayer} disabled={loading || !newPlayer.name} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase text-xs tracking-widest mt-4 shadow-xl transition-all">
-                  {loading ? 'Salvando...' : 'Cadastrar Atleta'}
+                  {loading ? 'Sincronizando Banco...' : 'Finalizar Cadastro'}
                 </button>
               </div>
             </div>
@@ -261,16 +287,16 @@ const App: React.FC = () => {
 
           {currentPage === 'game' && (
             <div className="max-w-xl mx-auto bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
-              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Nova Partida</h3>
+              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Registrar Confronto</h3>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Casa" value={newGame.homeTeam} onChange={e => setNewGame({...newGame, homeTeam: e.target.value})} />
-                  <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Fora" value={newGame.awayTeam} onChange={e => setNewGame({...newGame, awayTeam: e.target.value})} />
+                  <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Mandante" value={newGame.homeTeam} onChange={e => setNewGame({...newGame, homeTeam: e.target.value})} />
+                  <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Visitante" value={newGame.awayTeam} onChange={e => setNewGame({...newGame, awayTeam: e.target.value})} />
                 </div>
                 <input type="date" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" value={newGame.date} onChange={e => setNewGame({...newGame, date: e.target.value})} />
-                <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Competição" value={newGame.competition} onChange={e => setNewGame({...newGame, competition: e.target.value})} />
+                <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Campeonato / Torneio" value={newGame.competition} onChange={e => setNewGame({...newGame, competition: e.target.value})} />
                 <button onClick={saveGame} disabled={loading || !newGame.homeTeam} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase text-xs tracking-widest mt-4 shadow-xl transition-all">
-                  {loading ? 'Salvando...' : 'Registrar Partida'}
+                  {loading ? 'Salvando...' : 'Criar Partida'}
                 </button>
               </div>
             </div>
@@ -278,27 +304,28 @@ const App: React.FC = () => {
 
           {currentPage === 'roster' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {players.length === 0 && !dataLoading && <div className="col-span-full py-20 text-center text-slate-500 italic">Nenhum atleta encontrado no banco de dados.</div>}
               {players.map(p => (
-                <div key={p.id} className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl group hover:border-emerald-500/30 transition-all flex flex-col relative">
+                <div key={p.id} className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl flex flex-col relative group hover:border-emerald-500/30 transition-all">
                   <div className="flex items-center gap-5 mb-6">
                     <div className="w-16 h-16 rounded-2xl bg-slate-800 overflow-hidden border border-white/5 flex-shrink-0">
-                      {p.photoUrl ? <img src={p.photoUrl} className="w-full h-full object-cover" alt={p.name} /> : <div className="w-full h-full flex items-center justify-center text-slate-700">👤</div>}
+                      {p.photoUrl ? <img src={p.photoUrl} className="w-full h-full object-cover" alt={p.name} /> : <div className="w-full h-full flex items-center justify-center text-slate-700 text-2xl">👤</div>}
                     </div>
                     <div>
-                      <h4 className="text-lg font-black text-white uppercase">{p.name}</h4>
+                      <h4 className="text-lg font-black text-white uppercase truncate max-w-[150px]">{p.name}</h4>
                       <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">{p.position}</p>
                     </div>
                   </div>
                   <div className="space-y-3">
                     <select 
                       onChange={e => setRosterGameSelection({...rosterGameSelection, [p.id]: e.target.value})} 
-                      className="w-full bg-slate-800/50 border border-white/5 rounded-xl px-4 py-3 text-xs text-white outline-none"
+                      className="w-full bg-slate-800/50 border border-white/5 rounded-xl px-4 py-3 text-xs text-white outline-none focus:ring-1 focus:ring-emerald-500"
                     >
-                      <option value="">Selecione o jogo...</option>
-                      {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam} ({g.date})</option>)}
+                      <option value="">Selecione a partida...</option>
+                      {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} vs {g.awayTeam} ({g.date})</option>)}
                     </select>
                     <label className={`block w-full text-center py-3 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer transition-all border-2 border-dashed ${rosterGameSelection[p.id] ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500' : 'border-slate-800 text-slate-600 opacity-50'}`}>
-                      {loading ? 'Processando...' : 'Importar JSON Scout'}
+                      {loading ? 'Sincronizando...' : 'Vincular Scout JSON'}
                       <input 
                         type="file" 
                         accept=".json" 
@@ -317,29 +344,28 @@ const App: React.FC = () => {
             <div className="space-y-6">
               <div className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end shadow-2xl">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Partida</label>
+                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Selecionar Jogo</label>
                   <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none" value={selectedGameId || ''} onChange={e => { setSelectedGameId(e.target.value); setSelectedPlayerId(null); }}>
-                    <option value="">Escolha o jogo...</option>
+                    <option value="">Escolha...</option>
                     {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Atleta</label>
+                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Selecionar Atleta</label>
                   <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none" disabled={!selectedGameId} value={selectedPlayerId || ''} onChange={e => setSelectedPlayerId(e.target.value)}>
-                    <option value="">Escolha o atleta...</option>
+                    <option value="">Escolha...</option>
                     {players.filter(p => performances.some(perf => perf.playerId === p.id && perf.gameId === selectedGameId)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
                 <div className="flex gap-2 lg:col-span-2">
-                   <button onClick={() => setShowAIModal(true)} disabled={!selectedPerformance} className="flex-grow bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-20">Análise Inteligência Artificial</button>
-                   <button onClick={() => window.print()} disabled={!selectedPerformance} className="bg-white text-slate-900 font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all shadow-xl disabled:opacity-20">PDF</button>
+                   <button onClick={() => setShowAIModal(true)} disabled={!selectedPerformance} className="flex-grow bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-20">Relatório de IA</button>
+                   <button onClick={() => window.print()} disabled={!selectedPerformance} className="bg-white text-slate-900 font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all shadow-xl disabled:opacity-20">Imprimir PDF</button>
                 </div>
               </div>
 
               {selectedPerformance ? (
                 <div className="animate-in fade-in slide-in-from-top-4 duration-700 space-y-6">
-                  {/* Cabeçalho da Análise com Foto e Posição */}
-                  <div className="bg-slate-900 p-8 rounded-[3rem] border border-white/5 flex flex-col md:flex-row items-center gap-8 shadow-2xl relative overflow-hidden group">
+                  <div className="bg-slate-900 p-8 rounded-[3rem] border border-white/5 flex flex-col md:flex-row items-center gap-8 shadow-2xl relative overflow-hidden">
                     <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/5 to-transparent opacity-50"></div>
                     <div className="w-32 h-32 rounded-[2rem] bg-slate-800 overflow-hidden border-4 border-emerald-500/10 shadow-2xl relative z-10">
                       {selectedPerformance.analysis.player.photoUrl ? (
@@ -362,7 +388,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     <div className="ml-auto text-center bg-emerald-500/10 p-8 rounded-[2.5rem] border border-emerald-500/20 shadow-xl relative z-10">
-                      <p className="text-[10px] font-black text-emerald-500 mb-2 tracking-widest">RATING FINAL</p>
+                      <p className="text-[10px] font-black text-emerald-500 mb-2 tracking-widest">RATING SCOUT</p>
                       <p className="text-6xl font-black text-white italic tracking-tighter leading-none">
                         {selectedPerformance.analysis.stats.rating.toFixed(1)}
                       </p>
@@ -374,10 +400,10 @@ const App: React.FC = () => {
                       <PitchHeatmap events={filteredEvents} intensity={15} />
                     </div>
                     <div className="col-span-12 lg:col-span-4 grid grid-cols-1 gap-4">
-                      <StatCard label="Gols Marcados" value={selectedPerformance.analysis.stats.goals} icon="⚽" color="bg-emerald-500/20 text-emerald-500" isActive={metricFilter === 'goals'} onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')} />
+                      <StatCard label="Gols" value={selectedPerformance.analysis.stats.goals} icon="⚽" color="bg-emerald-500/20 text-emerald-500" isActive={metricFilter === 'goals'} onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')} />
                       <StatCard label="Assistências" value={selectedPerformance.analysis.stats.assists} icon="🎯" color="bg-blue-500/20 text-blue-500" isActive={metricFilter === 'assists'} onClick={() => setMetricFilter(metricFilter === 'assists' ? null : 'assists')} />
                       <StatCard label="Passes Decisivos" value={selectedPerformance.analysis.stats.keyPasses} icon="🔑" color="bg-yellow-500/20 text-yellow-500" isActive={metricFilter === 'keyPasses'} onClick={() => setMetricFilter(metricFilter === 'keyPasses' ? null : 'keyPasses')} />
-                      <StatCard label="Aproveitamento Passes" value={`${selectedPerformance.analysis.stats.passAccuracy.toFixed(0)}%`} suffix={`(${selectedPerformance.analysis.stats.passes})`} icon="P" color="bg-slate-700/50 text-white" isActive={metricFilter === 'passes'} onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')} />
+                      <StatCard label="Precisão de Passe" value={`${selectedPerformance.analysis.stats.passAccuracy.toFixed(0)}%`} suffix={`(${selectedPerformance.analysis.stats.passes})`} icon="P" color="bg-slate-700/50 text-white" isActive={metricFilter === 'passes'} onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')} />
                       <StatCard label="Duelos Vencidos" value={selectedPerformance.analysis.stats.duelsWon} suffix={`de ${selectedPerformance.analysis.stats.duels}`} icon="⚔️" color="bg-red-500/20 text-red-500" isActive={metricFilter === 'duels'} onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')} />
                       <StatCard label="Interceptações" value={selectedPerformance.analysis.stats.interceptions} icon="🛡️" color="bg-purple-500/20 text-purple-500" isActive={metricFilter === 'interceptions'} onClick={() => setMetricFilter(metricFilter === 'interceptions' ? null : 'interceptions')} />
                     </div>
@@ -385,7 +411,7 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <div className="py-32 text-center bg-slate-900/40 rounded-[3rem] border-2 border-dashed border-slate-800">
-                  <p className="text-slate-500 font-medium italic">Selecione uma partida e um atleta para carregar o mapa de calor e as estatísticas.</p>
+                  <p className="text-slate-500 font-medium italic">Dados indisponíveis. Selecione filtros válidos.</p>
                 </div>
               )}
             </div>
@@ -395,7 +421,7 @@ const App: React.FC = () => {
 
       {showAIModal && selectedPerformance && (
         <div className="fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-xl flex items-center justify-center p-8 animate-in fade-in zoom-in duration-300">
-          <div className="bg-slate-900 border border-white/10 w-full max-w-3xl rounded-[3rem] overflow-hidden flex flex-col shadow-[0_0_50px_rgba(16,185,129,0.15)] max-h-[85vh]">
+          <div className="bg-slate-900 border border-white/10 w-full max-w-3xl rounded-[3rem] overflow-hidden flex flex-col shadow-2xl max-h-[85vh]">
             <div className="p-10 border-b border-white/5 flex justify-between items-center bg-slate-800/20">
               <div className="flex items-center gap-5">
                 <div className="w-14 h-14 rounded-2xl bg-emerald-500 flex flex-col items-center justify-center text-white font-black leading-none shadow-lg shadow-emerald-500/30">
@@ -404,7 +430,7 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-2xl font-black text-white uppercase italic leading-none">{selectedPerformance.analysis.player.name}</h3>
-                  <p className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mt-2">Relatório Gerado por IA (Gemini 3 Pro)</p>
+                  <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mt-2">IA Gemini 3 Pro • Relatório Técnico</p>
                 </div>
               </div>
               <button onClick={() => setShowAIModal(false)} className="p-4 bg-white/5 hover:bg-white/10 rounded-full text-slate-400 hover:text-white transition-all">
