@@ -1,12 +1,9 @@
-
+// 1. Importação correta (usando a biblioteca instalada)
 import { createClient } from '@supabase/supabase-js';
 
-// No ambiente de execução, as variáveis são injetadas no process.env
-const supabaseUrl = (typeof process !== 'undefined' ? process.env.VITE_SUPABASE_URL : '') || '';
-const supabaseAnonKey = (typeof process !== 'undefined' ? process.env.VITE_SUPABASE_ANON_KEY : '') || '';
+// 2. Jeito certo de pegar variáveis no Vite (import.meta.env)
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Supabase credentials missing. Check your environment variables.");
-}
-
+// 3. Criar e exportar o cliente
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
