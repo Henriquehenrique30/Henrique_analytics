@@ -5,7 +5,7 @@ import { generateScoutingReport } from './services/geminiService';
 import PitchHeatmap from './components/PitchHeatmap';
 import StatCard from './components/StatCard';
 import { supabase } from './lib/supabase';
-import { Target, Activity, Share2, Shield, MousePointer2 } from 'lucide-react'; // Ícones
+import { Target, Activity, Share2, Shield, MousePointer2 } from 'lucide-react';
 
 // Tipos locais para navegação
 type Page = 'home' | 'player' | 'game' | 'roster' | 'analytics';
@@ -36,7 +36,6 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   
-  // Estados de Analytics
   const [metricFilter, setMetricFilter] = useState<MetricFilter>(null);
   const [selectedGameId, setSelectedGameId] = useState<string>("");
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
@@ -54,14 +53,28 @@ const App: React.FC = () => {
       const { data: gData } = await supabase.from('games').select('*');
       const { data: perfData } = await supabase.from('performances').select('*');
       
+      // Mapeamento JOGADORES (banco -> app)
       if (pData) {
         const mappedPlayers = pData.map((p: any) => ({
           ...p,
-          photoUrl: p.photo_url || p.photoUrl
+          photoUrl: p.photo_url || p.photoUrl // Garante compatibilidade
         }));
         setPlayers(mappedPlayers);
       }
-      if (gData) setGames(gData);
+
+      // Mapeamento JOGOS (banco -> app)
+      // CORREÇÃO: Converte home_team para homeTeam, etc.
+      if (gData) {
+        const mappedGames = gData.map((g: any) => ({
+          id: g.id,
+          homeTeam: g.home_team, // O banco retorna com underline
+          awayTeam: g.away_team,
+          date: g.date,
+          competition: g.competition
+        }));
+        setGames(mappedGames);
+      }
+
       if (perfData) setPerformances(perfData);
     } catch (err) {
       console.error("Fetch error:", err);
@@ -132,18 +145,37 @@ const App: React.FC = () => {
     }
   };
 
+  // --- FUNÇÃO CORRIGIDA: SAVE GAME ---
   const saveGame = async () => {
     if (!newGame.homeTeam || !newGame.awayTeam) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase.from('games').insert(newGame).select().single();
+      // CORREÇÃO: Mapeando camelCase (React) para snake_case (Supabase)
+      const { data, error } = await supabase.from('games').insert({
+        home_team: newGame.homeTeam,
+        away_team: newGame.awayTeam,
+        date: newGame.date,
+        competition: newGame.competition
+      }).select().single();
+
       if (error) throw error;
+
       if (data) {
-        setGames(prev => [...prev, data]);
+        // CORREÇÃO: Mapeando volta snake_case (Supabase) para camelCase (React)
+        const savedGame: RegisteredGame = {
+            id: data.id,
+            homeTeam: data.home_team,
+            awayTeam: data.away_team,
+            date: data.date,
+            competition: data.competition
+        };
+        
+        setGames(prev => [...prev, savedGame]);
         setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
         showNotification("Partida cadastrada!");
       }
     } catch (err: any) {
+      console.error("Save Game Error:", err);
       showNotification(`Erro: ${err.message}`);
     } finally {
       setLoading(false);
@@ -171,19 +203,7 @@ const App: React.FC = () => {
         const aiResult = await generateScoutingReport(player, parsedStats);
         const finalStats = { ...parsedStats, rating: aiResult.rating };
         
-        const newPerfData = {
-          player_id: selectedPlayerId,
-          game_id: selectedGameId,
-          analysis: {
-            player,
-            events,
-            stats: finalStats,
-            aiInsights: aiResult.report
-          }
-        };
-        
-        // Em um app real, salvaríamos no 'performances' do Supabase. 
-        // Aqui salvamos no estado local para visualização imediata.
+        // Em produção, salvaríamos no banco. Aqui salvamos no estado local.
         const performanceState: MatchPerformance = {
             id: crypto.randomUUID(),
             playerId: selectedPlayerId,
@@ -316,7 +336,6 @@ const App: React.FC = () => {
     </div>
   );
 
-  // --- REATIVAÇÃO: PÁGINA DE ELENCO ---
   const renderRoster = () => (
     <div className="space-y-8 animate-in fade-in">
         <div className="flex items-center justify-between mb-8">
@@ -348,10 +367,8 @@ const App: React.FC = () => {
     </div>
   );
 
-  // --- REATIVAÇÃO: PÁGINA DE ANALYTICS ---
   const renderAnalytics = () => (
     <div className="space-y-6 animate-in fade-in">
-        {/* BARRA SUPERIOR: SELEÇÃO E UPLOAD */}
         <div className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl flex flex-col lg:flex-row items-center gap-6 justify-between">
             <div className="flex gap-4 w-full lg:w-auto">
                 <select 
@@ -388,7 +405,6 @@ const App: React.FC = () => {
 
         {selectedPerformance ? (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[800px]">
-                {/* COLUNA 1: MAPA DE CALOR */}
                 <div className="lg:col-span-2 bg-slate-900/60 p-6 rounded-[2.5rem] border border-white/5 backdrop-blur-xl flex flex-col relative overflow-hidden">
                     <div className="flex justify-between items-center mb-6 z-10">
                         <div>
@@ -413,7 +429,6 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                {/* COLUNA 2: ESTATÍSTICAS */}
                 <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar">
                      <div className="bg-emerald-500 p-6 rounded-[2rem] text-white shadow-lg shadow-emerald-500/20 mb-6">
                         <div className="flex items-center gap-3 mb-2">
@@ -472,7 +487,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-200 flex overflow-hidden font-inter">
-      {/* SIDEBAR */}
       <aside className={`border-r border-white/5 bg-slate-900/40 backdrop-blur-md flex flex-col sticky top-0 h-screen transition-all duration-300 ${isSidebarOpen ? 'w-64' : 'w-0 overflow-hidden'}`}>
         <div className="p-7 w-64">
           <div className="flex items-center gap-3 mb-12">
@@ -489,7 +503,6 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* MAIN CONTENT */}
       <div className="flex-grow flex flex-col h-screen overflow-y-auto">
         {successMessage && <div className="fixed top-6 right-6 z-[60] animate-in slide-in-from-right-8 fade-in"><div className="bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl font-bold">{successMessage}</div></div>}
         
@@ -503,8 +516,6 @@ const App: React.FC = () => {
           {currentPage === 'home' && renderHome()}
           {currentPage === 'player' && renderRegisterPlayer()}
           {currentPage === 'game' && renderRegisterGame()}
-          
-          {/* AQUI ESTÁ A CORREÇÃO: Chamando as funções que criamos acima */}
           {currentPage === 'roster' && renderRoster()}
           {currentPage === 'analytics' && renderAnalytics()}
         </main>
