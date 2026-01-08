@@ -2,7 +2,10 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { PlayerInfo, RegisteredGame, MatchPerformance } from './types';
 import { parseFootballXML } from './services/xmlParser';
 import { generateScoutingReport } from './services/geminiService';
+import PitchHeatmap from './components/PitchHeatmap';
+import StatCard from './components/StatCard';
 import { supabase } from './lib/supabase';
+import { Target, Activity, Share2, Shield, MousePointer2 } from 'lucide-react'; // Ícones
 
 // Tipos locais para navegação
 type Page = 'home' | 'player' | 'game' | 'roster' | 'analytics';
@@ -32,9 +35,12 @@ const App: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  
+  // Estados de Analytics
   const [metricFilter, setMetricFilter] = useState<MetricFilter>(null);
-  const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
-  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const [selectedGameId, setSelectedGameId] = useState<string>("");
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string>("");
+  const [heatmapIntensity, setHeatmapIntensity] = useState(20);
 
   // --- EFEITOS ---
   useEffect(() => {
@@ -49,10 +55,9 @@ const App: React.FC = () => {
       const { data: perfData } = await supabase.from('performances').select('*');
       
       if (pData) {
-        // Mapear photo_url do banco para photoUrl do frontend, se necessário
         const mappedPlayers = pData.map((p: any) => ({
           ...p,
-          photoUrl: p.photo_url || p.photoUrl // Garante compatibilidade
+          photoUrl: p.photo_url || p.photoUrl
         }));
         setPlayers(mappedPlayers);
       }
@@ -86,10 +91,7 @@ const App: React.FC = () => {
 
       const { error: uploadError } = await supabase.storage
         .from('player-photos')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: false
-        });
+        .upload(filePath, file, { cacheControl: '3600', upsert: false });
 
       if (uploadError) throw new Error(uploadError.message);
 
@@ -108,7 +110,6 @@ const App: React.FC = () => {
     if (!newPlayer.name) return;
     setLoading(true);
     try {
-      // CORREÇÃO: Usando 'photo_url' para corresponder à coluna do Supabase
       const { data, error } = await supabase.from('players').insert({
         name: newPlayer.name,
         photo_url: newPlayer.photoUrl, 
@@ -118,11 +119,7 @@ const App: React.FC = () => {
       if (error) throw error;
       
       if (data) {
-        // Mapeia o retorno do banco para o formato local
-        const savedPlayer = {
-            ...data,
-            photoUrl: data.photo_url
-        };
+        const savedPlayer = { ...data, photoUrl: data.photo_url };
         setPlayers(prev => [...prev, savedPlayer]);
         setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
         showNotification("Jogador salvo no banco de dados!");
@@ -152,6 +149,88 @@ const App: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const handlePerformanceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedPlayerId || !selectedGameId) {
+      showNotification("Selecione Jogador e Partida antes de enviar o XML.");
+      return;
+    }
+
+    setLoading(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const xmlString = event.target?.result as string;
+        const { events, stats: parsedStats } = parseFootballXML(xmlString);
+        
+        const player = players.find(p => p.id === selectedPlayerId);
+        if (!player) return;
+
+        // Gera relatório com IA
+        const aiResult = await generateScoutingReport(player, parsedStats);
+        const finalStats = { ...parsedStats, rating: aiResult.rating };
+        
+        const newPerfData = {
+          player_id: selectedPlayerId,
+          game_id: selectedGameId,
+          analysis: {
+            player,
+            events,
+            stats: finalStats,
+            aiInsights: aiResult.report
+          }
+        };
+        
+        // Em um app real, salvaríamos no 'performances' do Supabase. 
+        // Aqui salvamos no estado local para visualização imediata.
+        const performanceState: MatchPerformance = {
+            id: crypto.randomUUID(),
+            playerId: selectedPlayerId,
+            gameId: selectedGameId,
+            analysis: {
+                player,
+                events,
+                stats: finalStats,
+                aiInsights: aiResult.report
+            }
+        };
+
+        setPerformances(prev => [...prev, performanceState]);
+        showNotification(`Sucesso! Scout de ${player.name} processado.`);
+      } catch (err) {
+        console.error("Upload error:", err);
+        showNotification("Erro ao processar arquivo XML.");
+      } finally {
+        setLoading(false);
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // --- LÓGICA DE DADOS (MEMO) ---
+  const selectedPerformance = useMemo(() => 
+    performances.find(p => p.gameId === selectedGameId && p.playerId === selectedPlayerId),
+    [performances, selectedGameId, selectedPlayerId]
+  );
+
+  const filteredEvents = useMemo(() => {
+    if (!selectedPerformance) return [];
+    if (!metricFilter) return selectedPerformance.analysis.events;
+    return selectedPerformance.analysis.events.filter(e => {
+      const type = e.type.toLowerCase();
+      switch (metricFilter) {
+        case 'goals': return type.includes('goal') && !type.includes('own');
+        case 'assists': return type.includes('assist');
+        case 'passes': return type.includes('pass');
+        case 'shots': return type.includes('shot');
+        case 'duels': return type.includes('duel') || type.includes('challenge') || type.includes('tackle');
+        default: return true;
+      }
+    });
+  }, [selectedPerformance, metricFilter]);
+
 
   // --- RENDERIZAÇÃO DAS TELAS ---
 
@@ -237,6 +316,160 @@ const App: React.FC = () => {
     </div>
   );
 
+  // --- REATIVAÇÃO: PÁGINA DE ELENCO ---
+  const renderRoster = () => (
+    <div className="space-y-8 animate-in fade-in">
+        <div className="flex items-center justify-between mb-8">
+            <h2 className="text-3xl font-black text-white">Elenco Atual</h2>
+            <div className="px-4 py-2 bg-slate-800 rounded-xl text-xs font-bold text-slate-400">
+                {players.length} Atletas
+            </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {players.map(player => (
+                <div key={player.id} className="group bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 hover:border-emerald-500/30 hover:bg-slate-800/80 transition-all cursor-pointer">
+                    <div className="relative w-full aspect-square mb-4 rounded-2xl overflow-hidden bg-slate-800">
+                        {player.photoUrl ? (
+                             <img src={player.photoUrl} alt={player.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center text-slate-600">
+                                <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" strokeWidth="2" /></svg>
+                            </div>
+                        )}
+                        <div className="absolute top-3 right-3 bg-emerald-500 text-white text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-wider">
+                            {player.position.slice(0, 3)}
+                        </div>
+                    </div>
+                    <h3 className="text-lg font-bold text-white mb-1 group-hover:text-emerald-400 transition-colors">{player.name}</h3>
+                    <p className="text-xs text-slate-500 font-medium uppercase tracking-widest">{player.position}</p>
+                </div>
+            ))}
+        </div>
+    </div>
+  );
+
+  // --- REATIVAÇÃO: PÁGINA DE ANALYTICS ---
+  const renderAnalytics = () => (
+    <div className="space-y-6 animate-in fade-in">
+        {/* BARRA SUPERIOR: SELEÇÃO E UPLOAD */}
+        <div className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl flex flex-col lg:flex-row items-center gap-6 justify-between">
+            <div className="flex gap-4 w-full lg:w-auto">
+                <select 
+                    value={selectedPlayerId} 
+                    onChange={(e) => setSelectedPlayerId(e.target.value)}
+                    className="bg-slate-800 border border-white/5 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500/50 outline-none w-full lg:w-64"
+                >
+                    <option value="">Selecione o Atleta</option>
+                    {players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+
+                <select 
+                    value={selectedGameId} 
+                    onChange={(e) => setSelectedGameId(e.target.value)}
+                    className="bg-slate-800 border border-white/5 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-emerald-500/50 outline-none w-full lg:w-64"
+                >
+                    <option value="">Selecione a Partida</option>
+                    {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} vs {g.awayTeam}</option>)}
+                </select>
+            </div>
+
+            <label className={`flex items-center gap-3 px-6 py-3 rounded-xl border border-dashed transition-all cursor-pointer ${selectedPlayerId && selectedGameId ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' : 'bg-slate-800/50 border-white/5 text-slate-500 cursor-not-allowed'}`}>
+                <Share2 className="w-4 h-4" />
+                <span className="text-xs font-bold uppercase tracking-widest">{loading ? 'Processando XML...' : 'Importar Scout (XML)'}</span>
+                <input 
+                    type="file" 
+                    accept=".xml" 
+                    onChange={handlePerformanceUpload} 
+                    disabled={loading || !selectedPlayerId || !selectedGameId}
+                    className="hidden" 
+                />
+            </label>
+        </div>
+
+        {selectedPerformance ? (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[800px]">
+                {/* COLUNA 1: MAPA DE CALOR */}
+                <div className="lg:col-span-2 bg-slate-900/60 p-6 rounded-[2.5rem] border border-white/5 backdrop-blur-xl flex flex-col relative overflow-hidden">
+                    <div className="flex justify-between items-center mb-6 z-10">
+                        <div>
+                            <h3 className="text-2xl font-black text-white flex items-center gap-3">
+                                <Target className="w-6 h-6 text-emerald-500" />
+                                Mapa de Calor
+                            </h3>
+                            <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-1">
+                                {metricFilter ? `Filtrando: ${metricFilter}` : 'Todas as ações'}
+                            </p>
+                        </div>
+                        <input 
+                            type="range" 
+                            min="5" max="50" 
+                            value={heatmapIntensity} 
+                            onChange={(e) => setHeatmapIntensity(Number(e.target.value))}
+                            className="w-32 accent-emerald-500" 
+                        />
+                    </div>
+                    <div className="flex-grow relative rounded-2xl overflow-hidden border border-white/5 bg-[#1a2e26]">
+                         <PitchHeatmap events={filteredEvents} intensity={heatmapIntensity} />
+                    </div>
+                </div>
+
+                {/* COLUNA 2: ESTATÍSTICAS */}
+                <div className="space-y-4 overflow-y-auto pr-2 custom-scrollbar">
+                     <div className="bg-emerald-500 p-6 rounded-[2rem] text-white shadow-lg shadow-emerald-500/20 mb-6">
+                        <div className="flex items-center gap-3 mb-2">
+                            <Activity className="w-5 h-5 opacity-80" />
+                            <span className="text-xs font-black uppercase tracking-widest opacity-80">AI RATING</span>
+                        </div>
+                        <div className="text-6xl font-black tracking-tighter">{selectedPerformance.analysis.stats.rating.toFixed(1)}</div>
+                     </div>
+
+                     <StatCard 
+                        label="Passes Certos" 
+                        value={selectedPerformance.analysis.stats.passesAccurate} 
+                        suffix={`/ ${selectedPerformance.analysis.stats.passes}`}
+                        icon={<Share2 className="w-4 h-4 text-white" />}
+                        color="bg-blue-500"
+                        isActive={metricFilter === 'passes'}
+                        onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')}
+                     />
+                     <StatCard 
+                        label="Finalizações" 
+                        value={selectedPerformance.analysis.stats.shots} 
+                        suffix={`(${selectedPerformance.analysis.stats.shotsOnTarget} no alvo)`}
+                        icon={<Target className="w-4 h-4 text-white" />}
+                        color="bg-red-500"
+                        isActive={metricFilter === 'shots'}
+                        onClick={() => setMetricFilter(metricFilter === 'shots' ? null : 'shots')}
+                     />
+                     <StatCard 
+                        label="Duelos Ganhos" 
+                        value={selectedPerformance.analysis.stats.duelsWon} 
+                        suffix={`/ ${selectedPerformance.analysis.stats.duels}`}
+                        icon={<Shield className="w-4 h-4 text-white" />}
+                        color="bg-amber-500"
+                        isActive={metricFilter === 'duels'}
+                        onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')}
+                     />
+                     <StatCard 
+                        label="Gols" 
+                        value={selectedPerformance.analysis.stats.goals} 
+                        icon={<Activity className="w-4 h-4 text-white" />}
+                        color="bg-emerald-500"
+                        isActive={metricFilter === 'goals'}
+                        onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')}
+                     />
+                </div>
+            </div>
+        ) : (
+            <div className="flex flex-col items-center justify-center h-96 bg-slate-900/40 border-2 border-dashed border-slate-800 rounded-[3rem]">
+                <MousePointer2 className="w-12 h-12 text-slate-600 mb-4" />
+                <h3 className="text-xl font-bold text-slate-400">Selecione um Atleta e uma Partida</h3>
+                <p className="text-slate-600">Ou faça o upload de um novo arquivo XML</p>
+            </div>
+        )}
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-200 flex overflow-hidden font-inter">
       {/* SIDEBAR */}
@@ -271,8 +504,9 @@ const App: React.FC = () => {
           {currentPage === 'player' && renderRegisterPlayer()}
           {currentPage === 'game' && renderRegisterGame()}
           
-          {currentPage === 'roster' && <div className="text-center text-slate-500 mt-20">Página de Elenco (Em construção)</div>}
-          {currentPage === 'analytics' && <div className="text-center text-slate-500 mt-20">Dashboard de Analytics (Em construção)</div>}
+          {/* AQUI ESTÁ A CORREÇÃO: Chamando as funções que criamos acima */}
+          {currentPage === 'roster' && renderRoster()}
+          {currentPage === 'analytics' && renderAnalytics()}
         </main>
       </div>
     </div>
