@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showAIModal, setShowAIModal] = useState(false);
+  const [isLocalMode, setIsLocalMode] = useState(false);
   
   const [players, setPlayers] = useState<PlayerInfo[]>([]);
   const [games, setGames] = useState<RegisteredGame[]>([]);
@@ -33,12 +34,22 @@ const App: React.FC = () => {
   const [newGame, setNewGame] = useState({ homeTeam: '', awayTeam: '', date: '', competition: '' });
 
   const fetchData = async () => {
-    if (!supabase) {
+    setDataLoading(true);
+    
+    // Fallback para LocalStorage se o Supabase não estiver disponível ou estiver em modo local
+    if (!supabase || isLocalMode) {
+      const storedPlayers = localStorage.getItem('local_players');
+      const storedGames = localStorage.getItem('local_games');
+      const storedPerf = localStorage.getItem('local_performances');
+      
+      if (storedPlayers) setPlayers(JSON.parse(storedPlayers));
+      if (storedGames) setGames(JSON.parse(storedGames));
+      if (storedPerf) setPerformances(JSON.parse(storedPerf));
+      
       setDataLoading(false);
       return;
     }
 
-    setDataLoading(true);
     try {
       const { data: pData, error: pError } = await supabase.from('players').select('*').order('name');
       if (pError) throw pError;
@@ -57,29 +68,45 @@ const App: React.FC = () => {
         id: p.id, playerId: p.player_id, gameId: p.game_id, analysis: p.analysis
       })));
     } catch (error: any) {
-      console.error("Erro ao carregar dados:", error);
-      showNotification(`Falha de conexão: ${error.message}`, 'error');
+      console.error("Erro ao carregar dados do banco:", error);
+      showNotification(`Falha de sincronização. Usando dados locais temporários.`, 'error');
+      // Tentativa de carregar local se o banco falhar
+      const storedPlayers = localStorage.getItem('local_players');
+      if (storedPlayers) setPlayers(JSON.parse(storedPlayers));
     } finally {
       setDataLoading(false);
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { fetchData(); }, [isLocalMode]);
 
   const showNotification = (msg: string, type: 'success' | 'error' = 'success') => {
     setNotification({ msg, type });
     setTimeout(() => setNotification(null), 5000);
   };
 
-  if (!supabase) {
+  // Se o Supabase estiver ausente e o usuário não escolheu modo local, mostra tela de erro com opção
+  if (!supabase && !isLocalMode) {
     return (
       <div className="min-h-screen bg-[#0b1120] flex items-center justify-center p-6 text-center">
-        <div className="max-w-md p-10 bg-slate-900 rounded-[3rem] border border-red-500/20 shadow-2xl">
-          <div className="text-5xl mb-6">⚠️</div>
-          <h1 className="text-2xl font-black text-white uppercase italic mb-4">Conexão Pendente</h1>
-          <p className="text-slate-400 mb-8 italic">As chaves de configuração do banco de dados (Supabase) não foram encontradas. Verifique as configurações de ambiente do projeto.</p>
-          <div className="text-[10px] font-mono bg-black/40 p-4 rounded-xl text-red-400 break-all">
-            MISSING: VITE_SUPABASE_URL / ANON_KEY
+        <div className="max-w-md p-10 bg-slate-900 rounded-[3rem] border border-red-500/20 shadow-2xl animate-in fade-in zoom-in duration-500">
+          <div className="w-20 h-20 bg-red-500/10 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-red-500/20">
+             <span className="text-4xl">⚠️</span>
+          </div>
+          <h1 className="text-3xl font-black text-white uppercase italic mb-4 tracking-tighter">Conexão Pendente</h1>
+          <p className="text-slate-400 mb-8 italic leading-relaxed">
+            As chaves do Supabase não foram detectadas. Você pode configurar as variáveis de ambiente ou continuar usando o banco de dados local do seu navegador.
+          </p>
+          <div className="flex flex-col gap-3">
+            <button 
+              onClick={() => setIsLocalMode(true)}
+              className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-4 rounded-2xl uppercase text-[10px] tracking-[0.2em] transition-all shadow-xl active:scale-95"
+            >
+              Continuar em Modo Local (Offline)
+            </button>
+            <div className="text-[10px] font-mono bg-black/40 p-4 rounded-xl text-red-400/70 break-all select-all">
+              ERRO: VITE_SUPABASE_URL ou ANON_KEY MISSING
+            </div>
           </div>
         </div>
       </div>
@@ -97,7 +124,7 @@ const App: React.FC = () => {
         const json = JSON.parse(event.target?.result as string);
         const { events, stats: parsedStats } = parseFootballJSON(json);
         const player = players.find(p => p.id === playerId);
-        if (!player) throw new Error("Atleta não encontrado no banco de dados.");
+        if (!player) throw new Error("Atleta não encontrado.");
 
         const aiResult = await generateScoutingReport(player, parsedStats);
         
@@ -108,22 +135,35 @@ const App: React.FC = () => {
           aiInsights: aiResult.report
         };
 
-        const { data, error } = await supabase.from('performances').upsert([{
-          player_id: playerId,
-          game_id: gameId,
-          analysis: analysisData
-        }], { onConflict: 'player_id,game_id' }).select();
-
-        if (error) throw error;
-
-        setPerformances(prev => [
-          ...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), 
-          { id: data[0].id, playerId: data[0].player_id, gameId: data[0].game_id, analysis: data[0].analysis }
-        ]);
-        showNotification("Desempenho sincronizado com sucesso!");
+        if (supabase && !isLocalMode) {
+          const { data, error } = await supabase.from('performances').upsert([{
+            player_id: playerId,
+            game_id: gameId,
+            analysis: analysisData
+          }], { onConflict: 'player_id,game_id' }).select();
+          if (error) throw error;
+          
+          setPerformances(prev => [
+            ...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), 
+            { id: data[0].id, playerId: data[0].player_id, gameId: data[0].game_id, analysis: data[0].analysis }
+          ]);
+        } else {
+          // Modo Local
+          const newPerf: MatchPerformance = {
+            id: Math.random().toString(36).substr(2, 9),
+            playerId,
+            gameId,
+            analysis: analysisData
+          };
+          const updated = [...performances.filter(p => !(p.playerId === playerId && p.gameId === gameId)), newPerf];
+          setPerformances(updated);
+          localStorage.setItem('local_performances', JSON.stringify(updated));
+        }
+        
+        showNotification("Desempenho sincronizado!");
       } catch (err: any) {
         console.error(err);
-        showNotification(`Erro no processamento: ${err.message}`, 'error');
+        showNotification(`Erro: ${err.message}`, 'error');
       } finally {
         setLoading(false);
         if (e.target) e.target.value = '';
@@ -136,37 +176,45 @@ const App: React.FC = () => {
     if (!newPlayer.name) return;
     setLoading(true);
     try {
-      let photoUrl = null;
-      if (selectedPhotoFile) {
+      let photoUrl = photoPreview; // Em modo local usamos o blob URL
+      
+      if (supabase && !isLocalMode && selectedPhotoFile) {
         const fileName = `${Date.now()}_${selectedPhotoFile.name.replace(/\s/g, '_')}`;
         const { error: upErr } = await supabase.storage.from('player-photos').upload(fileName, selectedPhotoFile);
-        if (upErr) {
-            console.error("Erro upload storage:", upErr);
-        } else {
+        if (!upErr) {
             const { data } = supabase.storage.from('player-photos').getPublicUrl(fileName);
             photoUrl = data.publicUrl;
         }
       }
       
-      const { data, error } = await supabase.from('players').insert([{
-        name: newPlayer.name,
-        photo_url: photoUrl,
-        position: newPlayer.position
-      }]).select();
-      
-      if (error) throw error;
-      
-      if (data) {
+      if (supabase && !isLocalMode) {
+        const { data, error } = await supabase.from('players').insert([{
+          name: newPlayer.name,
+          photo_url: photoUrl,
+          position: newPlayer.position
+        }]).select();
+        if (error) throw error;
         setPlayers(prev => [...prev, { ...data[0], photoUrl: data[0].photo_url }]);
-        setCurrentPage('roster');
-        showNotification("Atleta cadastrado com sucesso!");
-        setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
-        setPhotoPreview(null);
-        setSelectedPhotoFile(null);
+      } else {
+        // Modo Local
+        const localPlayer: PlayerInfo = {
+          id: Math.random().toString(36).substr(2, 9),
+          name: newPlayer.name,
+          photoUrl: photoPreview,
+          position: newPlayer.position
+        };
+        const updated = [...players, localPlayer];
+        setPlayers(updated);
+        localStorage.setItem('local_players', JSON.stringify(updated));
       }
+
+      setCurrentPage('roster');
+      showNotification("Atleta cadastrado!");
+      setNewPlayer({ name: '', photoUrl: null, position: 'Meio-Campista' });
+      setPhotoPreview(null);
+      setSelectedPhotoFile(null);
     } catch (e: any) { 
-      console.error("Erro savePlayer:", e);
-      showNotification(`Erro ao cadastrar atleta: ${e.message}`, 'error'); 
+      showNotification(`Erro: ${e.message}`, 'error'); 
     }
     setLoading(false);
   };
@@ -175,24 +223,31 @@ const App: React.FC = () => {
     if (!newGame.homeTeam || !newGame.awayTeam) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase.from('games').insert([{
-        home_team: newGame.homeTeam,
-        away_team: newGame.awayTeam,
-        date: newGame.date,
-        competition: newGame.competition
-      }]).select();
-      
-      if (error) throw error;
-      
-      if (data) {
+      if (supabase && !isLocalMode) {
+        const { data, error } = await supabase.from('games').insert([{
+          home_team: newGame.homeTeam,
+          away_team: newGame.awayTeam,
+          date: newGame.date,
+          competition: newGame.competition
+        }]).select();
+        if (error) throw error;
         setGames(prev => [{ id: data[0].id, homeTeam: data[0].home_team, awayTeam: data[0].away_team, date: data[0].date, competition: data[0].competition }, ...prev]);
-        setCurrentPage('analytics');
-        showNotification("Partida registrada com sucesso!");
-        setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
+      } else {
+        // Modo Local
+        const localGame: RegisteredGame = {
+          id: Math.random().toString(36).substr(2, 9),
+          ...newGame
+        };
+        const updated = [localGame, ...games];
+        setGames(updated);
+        localStorage.setItem('local_games', JSON.stringify(updated));
       }
+
+      setCurrentPage('analytics');
+      showNotification("Partida registrada!");
+      setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
     } catch (e: any) { 
-      console.error("Erro saveGame:", e);
-      showNotification(`Erro ao registrar partida: ${e.message}`, 'error'); 
+      showNotification(`Erro: ${e.message}`, 'error'); 
     }
     setLoading(false);
   };
@@ -247,6 +302,20 @@ const App: React.FC = () => {
               </button>
             ))}
           </nav>
+          
+          <div className="mt-auto p-4 bg-slate-900/60 rounded-2xl border border-white/5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Storage</span>
+              <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${isLocalMode ? 'bg-yellow-500/20 text-yellow-500' : 'bg-emerald-500/20 text-emerald-500'}`}>
+                {isLocalMode ? 'Offline' : 'Online'}
+              </span>
+            </div>
+            {isLocalMode && (
+              <button onClick={() => window.location.reload()} className="w-full text-[8px] font-bold text-emerald-400 hover:text-emerald-300 uppercase tracking-widest text-left">
+                ↻ Tentar Reconectar
+              </button>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -262,8 +331,10 @@ const App: React.FC = () => {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6h16M4 12h8m-8 6h16" strokeWidth="2.5"/></svg>
           </button>
           <div className="ml-auto flex items-center gap-4">
-             <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">Database Sync</span>
-             <div className={`w-2 h-2 rounded-full animate-pulse ${dataLoading ? 'bg-yellow-500' : 'bg-emerald-500'}`}></div>
+             <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
+               {isLocalMode ? 'Operando em Memória Local' : 'Database Sync Ativo'}
+             </span>
+             <div className={`w-2 h-2 rounded-full animate-pulse ${isLocalMode ? 'bg-yellow-500' : 'bg-emerald-500'}`}></div>
           </div>
         </header>
 
@@ -271,16 +342,16 @@ const App: React.FC = () => {
           {currentPage === 'home' && (
              <div className="h-[70vh] flex items-center justify-center">
                <div className="text-center p-12 bg-slate-900/40 border-2 border-dashed border-slate-800 rounded-[3rem] max-w-xl">
-                 <h3 className="text-2xl font-black text-white mb-3">SISTEMA DE ANÁLISE PROFISSIONAL</h3>
-                 <p className="text-slate-500 mb-8 italic">Gerencie atletas e gere heatmaps a partir de scouts JSON.</p>
-                 <button onClick={() => setCurrentPage('roster')} className="px-10 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">Começar Análise</button>
+                 <h3 className="text-2xl font-black text-white mb-3">SC Pro Scout System</h3>
+                 <p className="text-slate-500 mb-8 italic">Análise tática e visualização de desempenho individual.</p>
+                 <button onClick={() => setCurrentPage('roster')} className="px-10 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all">Começar</button>
                </div>
              </div>
           )}
 
           {currentPage === 'player' && (
             <div className="max-w-xl mx-auto bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
-              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Cadastro de Atleta</h3>
+              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Cadastrar Atleta</h3>
               <div className="space-y-4">
                 <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" placeholder="Nome do Jogador" value={newPlayer.name} onChange={e => setNewPlayer({...newPlayer, name: e.target.value})} />
                 <select className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:ring-1 focus:ring-emerald-500/50" value={newPlayer.position} onChange={e => setNewPlayer({...newPlayer, position: e.target.value})}>
@@ -291,7 +362,7 @@ const App: React.FC = () => {
                     {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" alt="Preview" /> : <div className="w-full h-full flex items-center justify-center text-slate-700 font-black text-[8px] uppercase text-center p-2">Sem Foto</div>}
                   </div>
                   <label className="flex-grow bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 text-center rounded-xl text-[10px] font-black uppercase cursor-pointer text-emerald-400 hover:bg-emerald-500/20 transition-all">
-                    Upload Foto (PNG/JPG)
+                    Carregar Foto
                     <input type="file" accept="image/*" className="hidden" onChange={e => {
                       const f = e.target.files?.[0];
                       if(f) { setSelectedPhotoFile(f); setPhotoPreview(URL.createObjectURL(f)); }
@@ -299,7 +370,7 @@ const App: React.FC = () => {
                   </label>
                 </div>
                 <button onClick={savePlayer} disabled={loading || !newPlayer.name} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase text-xs tracking-widest mt-4 shadow-xl transition-all">
-                  {loading ? 'Salvando...' : 'Finalizar Cadastro'}
+                  {loading ? 'Sincronizando...' : 'Confirmar Cadastro'}
                 </button>
               </div>
             </div>
@@ -307,16 +378,16 @@ const App: React.FC = () => {
 
           {currentPage === 'game' && (
             <div className="max-w-xl mx-auto bg-slate-900/60 p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
-              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Registrar Confronto</h3>
+              <h3 className="text-2xl font-black text-white mb-6 uppercase italic">Registrar Partida</h3>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Mandante" value={newGame.homeTeam} onChange={e => setNewGame({...newGame, homeTeam: e.target.value})} />
                   <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Time Visitante" value={newGame.awayTeam} onChange={e => setNewGame({...newGame, awayTeam: e.target.value})} />
                 </div>
                 <input type="date" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" value={newGame.date} onChange={e => setNewGame({...newGame, date: e.target.value})} />
-                <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Campeonato / Torneio" value={newGame.competition} onChange={e => setNewGame({...newGame, competition: e.target.value})} />
+                <input type="text" className="w-full bg-slate-800/50 border border-white/5 rounded-2xl px-6 py-4 text-white" placeholder="Competição" value={newGame.competition} onChange={e => setNewGame({...newGame, competition: e.target.value})} />
                 <button onClick={saveGame} disabled={loading || !newGame.homeTeam} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black py-5 rounded-2xl uppercase text-xs tracking-widest mt-4 shadow-xl transition-all">
-                  {loading ? 'Salvando...' : 'Criar Partida'}
+                  {loading ? 'Salvando...' : 'Criar Jogo'}
                 </button>
               </div>
             </div>
@@ -324,7 +395,6 @@ const App: React.FC = () => {
 
           {currentPage === 'roster' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {players.length === 0 && !dataLoading && <div className="col-span-full py-20 text-center text-slate-500 italic">Nenhum atleta encontrado no banco de dados.</div>}
               {players.map(p => (
                 <div key={p.id} className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 backdrop-blur-xl flex flex-col relative group hover:border-emerald-500/30 transition-all">
                   <div className="flex items-center gap-5 mb-6">
@@ -339,13 +409,13 @@ const App: React.FC = () => {
                   <div className="space-y-3">
                     <select 
                       onChange={e => setRosterGameSelection({...rosterGameSelection, [p.id]: e.target.value})} 
-                      className="w-full bg-slate-800/50 border border-white/5 rounded-xl px-4 py-3 text-xs text-white outline-none focus:ring-1 focus:ring-emerald-500"
+                      className="w-full bg-slate-800/50 border border-white/5 rounded-xl px-4 py-3 text-xs text-white outline-none"
                     >
-                      <option value="">Selecione a partida...</option>
-                      {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} vs {g.awayTeam} ({g.date})</option>)}
+                      <option value="">Selecione o jogo...</option>
+                      {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam} ({g.date})</option>)}
                     </select>
                     <label className={`block w-full text-center py-3 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-pointer transition-all border-2 border-dashed ${rosterGameSelection[p.id] ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500' : 'border-slate-800 text-slate-600 opacity-50'}`}>
-                      {loading ? 'Processando...' : 'Vincular Scout JSON'}
+                      {loading ? 'Sincronizando...' : 'Vincular Scout JSON'}
                       <input 
                         type="file" 
                         accept=".json" 
@@ -364,22 +434,22 @@ const App: React.FC = () => {
             <div className="space-y-6">
               <div className="bg-slate-900/60 p-6 rounded-[2rem] border border-white/5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end shadow-2xl">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Selecionar Jogo</label>
+                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Partida</label>
                   <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none" value={selectedGameId || ''} onChange={e => { setSelectedGameId(e.target.value); setSelectedPlayerId(null); }}>
                     <option value="">Escolha...</option>
                     {games.map(g => <option key={g.id} value={g.id}>{g.homeTeam} x {g.awayTeam}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Selecionar Atleta</label>
+                  <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest ml-1">Jogador</label>
                   <select className="w-full bg-slate-800/40 border border-white/5 rounded-2xl px-5 py-3 text-sm text-white outline-none" disabled={!selectedGameId} value={selectedPlayerId || ''} onChange={e => setSelectedPlayerId(e.target.value)}>
                     <option value="">Escolha...</option>
                     {players.filter(p => performances.some(perf => perf.playerId === p.id && perf.gameId === selectedGameId)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
                 <div className="flex gap-2 lg:col-span-2">
-                   <button onClick={() => setShowAIModal(true)} disabled={!selectedPerformance} className="flex-grow bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-20">Relatório de IA</button>
-                   <button onClick={() => window.print()} disabled={!selectedPerformance} className="bg-white text-slate-900 font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all shadow-xl disabled:opacity-20">PDF</button>
+                   <button onClick={() => setShowAIModal(true)} disabled={!selectedPerformance} className="flex-grow bg-emerald-600 text-white font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-20">Análise IA</button>
+                   <button onClick={() => window.print()} disabled={!selectedPerformance} className="bg-white text-slate-900 font-black py-3 px-6 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100 transition-all shadow-xl disabled:opacity-20">Imprimir PDF</button>
                 </div>
               </div>
 
@@ -405,7 +475,7 @@ const App: React.FC = () => {
                       </div>
                     </div>
                     <div className="ml-auto text-center bg-emerald-500/10 p-8 rounded-[2.5rem] border border-emerald-500/20 shadow-xl relative z-10">
-                      <p className="text-[10px] font-black text-emerald-500 mb-2 tracking-widest">RATING SCOUT</p>
+                      <p className="text-[10px] font-black text-emerald-500 mb-2 tracking-widest">NOTA FINAL</p>
                       <p className="text-6xl font-black text-white italic tracking-tighter leading-none">
                         {selectedPerformance.analysis.stats.rating.toFixed(1)}
                       </p>
@@ -420,15 +490,15 @@ const App: React.FC = () => {
                       <StatCard label="Gols" value={selectedPerformance.analysis.stats.goals} icon="⚽" color="bg-emerald-500/20 text-emerald-500" isActive={metricFilter === 'goals'} onClick={() => setMetricFilter(metricFilter === 'goals' ? null : 'goals')} />
                       <StatCard label="Assistências" value={selectedPerformance.analysis.stats.assists} icon="🎯" color="bg-blue-500/20 text-blue-500" isActive={metricFilter === 'assists'} onClick={() => setMetricFilter(metricFilter === 'assists' ? null : 'assists')} />
                       <StatCard label="Passes Decisivos" value={selectedPerformance.analysis.stats.keyPasses} icon="🔑" color="bg-yellow-500/20 text-yellow-500" isActive={metricFilter === 'keyPasses'} onClick={() => setMetricFilter(metricFilter === 'keyPasses' ? null : 'keyPasses')} />
-                      <StatCard label="Precisão de Passe" value={`${selectedPerformance.analysis.stats.passAccuracy.toFixed(0)}%`} suffix={`(${selectedPerformance.analysis.stats.passes})`} icon="P" color="bg-slate-700/50 text-white" isActive={metricFilter === 'passes'} onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')} />
-                      <StatCard label="Duelos Vencidos" value={selectedPerformance.analysis.stats.duelsWon} suffix={`de ${selectedPerformance.analysis.stats.duels}`} icon="⚔️" color="bg-red-500/20 text-red-500" isActive={metricFilter === 'duels'} onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')} />
+                      <StatCard label="Aproveitamento" value={`${selectedPerformance.analysis.stats.passAccuracy.toFixed(0)}%`} suffix={`(${selectedPerformance.analysis.stats.passes})`} icon="P" color="bg-slate-700/50 text-white" isActive={metricFilter === 'passes'} onClick={() => setMetricFilter(metricFilter === 'passes' ? null : 'passes')} />
+                      <StatCard label="Duelos" value={selectedPerformance.analysis.stats.duelsWon} suffix={`de ${selectedPerformance.analysis.stats.duels}`} icon="⚔️" color="bg-red-500/20 text-red-500" isActive={metricFilter === 'duels'} onClick={() => setMetricFilter(metricFilter === 'duels' ? null : 'duels')} />
                       <StatCard label="Interceptações" value={selectedPerformance.analysis.stats.interceptions} icon="🛡️" color="bg-purple-500/20 text-purple-500" isActive={metricFilter === 'interceptions'} onClick={() => setMetricFilter(metricFilter === 'interceptions' ? null : 'interceptions')} />
                     </div>
                   </div>
                 </div>
               ) : (
                 <div className="py-32 text-center bg-slate-900/40 rounded-[3rem] border-2 border-dashed border-slate-800">
-                  <p className="text-slate-500 font-medium italic">Selecione uma partida e um atleta para carregar os dados.</p>
+                  <p className="text-slate-500 font-medium italic">Dados indisponíveis. Filtre para começar.</p>
                 </div>
               )}
             </div>
@@ -458,7 +528,7 @@ const App: React.FC = () => {
               {selectedPerformance.analysis.aiInsights}
             </div>
             <div className="p-8 border-t border-white/5 bg-slate-800/10 text-center">
-               <button onClick={() => setShowAIModal(false)} className="px-16 py-4 bg-white text-slate-900 font-black rounded-2xl uppercase text-[10px] tracking-widest hover:bg-slate-100 transition-all shadow-xl active:scale-95">Fechar Relatório</button>
+               <button onClick={() => setShowAIModal(false)} className="px-16 py-4 bg-white text-slate-900 font-black rounded-2xl uppercase text-[10px] tracking-widest hover:bg-slate-100 transition-all shadow-xl active:scale-95">Fechar</button>
             </div>
           </div>
         </div>
