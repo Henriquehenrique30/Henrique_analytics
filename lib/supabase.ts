@@ -1,12 +1,31 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// Usando process.env para evitar erros de undefined em alguns ambientes de build
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY;
+// Safe environment variable access to prevent "Cannot read properties of undefined"
+const getEnvVar = (name: string): string | undefined => {
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env[name];
+    }
+  } catch (e) {}
+  
+  // Fallback to import.meta.env for Vite environments
+  try {
+    // @ts-ignore
+    if (import.meta && import.meta.env) {
+      // @ts-ignore
+      return import.meta.env[name];
+    }
+  } catch (e) {}
+  
+  return undefined;
+};
+
+const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Supabase credentials missing. Check your environment variables.");
+  console.warn("Supabase configuration missing! Database features will not work correctly. Ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.");
 }
 
 export const supabase = createClient(

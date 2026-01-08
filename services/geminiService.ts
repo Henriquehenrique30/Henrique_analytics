@@ -5,8 +5,15 @@ import { PlayerStats, PlayerInfo } from "../types";
 export interface AIAnalysisResult { report: string; rating: number; }
 
 export const generateScoutingReport = async (player: PlayerInfo, stats: PlayerStats): Promise<AIAnalysisResult> => {
-  // A chave da API deve vir exclusivamente de process.env.API_KEY
-  const apiKey = process.env.API_KEY;
+  // Use a safe access pattern but maintain process.env.API_KEY as the primary source per guidelines
+  let apiKey: string | undefined;
+  
+  try {
+    apiKey = process.env.API_KEY;
+  } catch (e) {
+    // Fallback attempt if process is not globally defined in the browser runtime
+    apiKey = (globalThis as any).process?.env?.API_KEY;
+  }
 
   if (!apiKey) {
     console.error("ERRO CRÍTICO: API Key não configurada em process.env.API_KEY");
