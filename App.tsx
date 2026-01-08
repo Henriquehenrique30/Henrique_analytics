@@ -20,23 +20,32 @@ const App: React.FC = () => {
   const [performances, setPerformances] = useState<MatchPerformance[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   
-  // File upload state
   const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
-  // Initial Data Fetch
   const fetchData = async () => {
     setDataLoading(true);
-    const { data: pData } = await supabase.from('players').select('*').order('name');
-    const { data: gData } = await supabase.from('games').select('*').order('date', { ascending: false });
-    const { data: perfData } = await supabase.from('performances').select('*');
-    
-    if (pData) setPlayers(pData.map((p: any) => ({ ...p, photoUrl: p.photo_url })));
-    if (gData) setGames(gData.map((g: any) => ({ 
-      id: g.id, homeTeam: g.home_team, awayTeam: g.away_team, date: g.date, competition: g.competition 
-    })));
-    if (perfData) setPerformances(perfData);
-    setDataLoading(false);
+    try {
+      const { data: pData } = await supabase.from('players').select('*').order('name');
+      const { data: gData } = await supabase.from('games').select('*').order('date', { ascending: false });
+      const { data: perfData } = await supabase.from('performances').select('*');
+      
+      if (pData) setPlayers(pData.map((p: any) => ({ ...p, photoUrl: p.photo_url })));
+      if (gData) setGames(gData.map((g: any) => ({ 
+        id: g.id, homeTeam: g.home_team, awayTeam: g.away_team, date: g.date, competition: g.competition 
+      })));
+      // Map Supabase snake_case columns to camelCase types
+      if (perfData) setPerformances(perfData.map((p: any) => ({
+        id: p.id,
+        playerId: p.player_id,
+        gameId: p.game_id,
+        analysis: p.analysis
+      })));
+    } catch (error) {
+      console.error("Erro ao carregar dados:", error);
+    } finally {
+      setDataLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -64,7 +73,7 @@ const App: React.FC = () => {
 
   const showNotification = (msg: string) => {
     setSuccessMessage(msg);
-    setTimeout(() => setSuccessMessage(null), 3000);
+    setTimeout(() => setSuccessMessage(null), 4000);
   };
 
   const handlePerformanceUpload = async (e: React.ChangeEvent<HTMLInputElement>, playerId: string, gameId: string) => {
@@ -73,13 +82,27 @@ const App: React.FC = () => {
 
     setLoading(true);
     const reader = new FileReader();
+    
+    reader.onerror = () => {
+      showNotification("Erro ao ler o arquivo físico.");
+      setLoading(false);
+    };
+
     reader.onload = async (event) => {
       try {
         const xmlString = event.target?.result as string;
+        if (!xmlString || xmlString.trim().length === 0) {
+          throw new Error("Arquivo XML vazio ou inválido.");
+        }
+
         const { events, stats: parsedStats } = parseFootballXML(xmlString);
         
+        if (events.length === 0) {
+          throw new Error("Nenhum evento detectado no XML. Verifique o formato.");
+        }
+
         const player = players.find(p => p.id === playerId);
-        if (!player) return;
+        if (!player) throw new Error("Atleta não encontrado no sistema.");
 
         const aiResult = await generateScoutingReport(player, parsedStats);
         const finalStats = { ...parsedStats, rating: aiResult.rating };
@@ -95,16 +118,31 @@ const App: React.FC = () => {
           player_id: playerId,
           game_id: gameId,
           analysis: analysisData
-        }], { onConflict: 'player_id,game_id' }).select();
+        }], { 
+          onConflict: 'player_id,game_id' 
+        }).select();
 
-        if (error) throw error;
+        if (error) {
+          console.error("Supabase error:", error);
+          throw new Error(`Erro no Banco: ${error.message}`);
+        }
 
-        setPerformances(prev => [...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), data[0]]);
-        showNotification(`Sucesso! Scout de ${player.name} processado.`);
+        // Map Supabase response back to camelCase local state
+        setPerformances(prev => [
+          ...prev.filter(p => !(p.playerId === playerId && p.gameId === gameId)), 
+          {
+            id: data[0].id,
+            playerId: data[0].player_id,
+            gameId: data[0].game_id,
+            analysis: data[0].analysis
+          }
+        ]);
         
-      } catch (err) {
-        console.error("Upload error:", err);
-        showNotification("Erro ao processar arquivo XML.");
+        showNotification(`Sucesso! Scout de ${player.name} atualizado.`);
+        
+      } catch (err: any) {
+        console.error("Upload process error:", err);
+        showNotification(err.message || "Erro inesperado ao processar XML.");
       } finally {
         setLoading(false);
         if (e.target) e.target.value = '';
@@ -129,7 +167,7 @@ const App: React.FC = () => {
 
       if (selectedPhotoFile) {
         const fileExt = selectedPhotoFile.name.split('.').pop();
-        const fileName = `${Math.random()}.${fileExt}`;
+        const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
         const filePath = `${fileName}`;
 
         const { error: uploadError } = await supabase.storage
@@ -159,9 +197,9 @@ const App: React.FC = () => {
       setSelectedPhotoFile(null);
       showNotification("Jogador cadastrado com sucesso!");
       setCurrentPage('roster');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showNotification("Erro ao salvar jogador. Verifique se o bucket 'player-photos' existe.");
+      showNotification(`Erro: ${err.message || 'Falha ao salvar'}`);
     } finally {
       setLoading(false);
     }
@@ -180,13 +218,13 @@ const App: React.FC = () => {
 
       if (error) throw error;
 
-      setGames(prev => [...prev, { 
+      setGames(prev => [{ 
         id: data[0].id, 
         homeTeam: data[0].home_team, 
         awayTeam: data[0].away_team, 
         date: data[0].date, 
         competition: data[0].competition 
-      }]);
+      }, ...prev]);
       setNewGame({ homeTeam: '', awayTeam: '', date: '', competition: '' });
       showNotification("Partida cadastrada!");
       setCurrentPage('analytics');
@@ -202,10 +240,11 @@ const App: React.FC = () => {
       const { error } = await supabase.from('players').delete().eq('id', id);
       if (!error) {
         setPlayers(prev => prev.filter(p => p.id !== id));
+        // Fix: Use camelCase property name
         setPerformances(prev => prev.filter(perf => perf.playerId !== id));
         showNotification("Atleta removido.");
       } else {
-        showNotification("Erro ao excluir.");
+        showNotification("Erro ao excluir atleta.");
       }
     }
   };
@@ -215,13 +254,17 @@ const App: React.FC = () => {
       const { error } = await supabase.from('games').delete().eq('id', id);
       if (!error) {
         setGames(prev => prev.filter(g => g.id !== id));
+        // Fix: Use camelCase property name
         setPerformances(prev => prev.filter(perf => perf.gameId !== id));
         showNotification("Partida removida.");
+      } else {
+        showNotification("Erro ao excluir partida.");
       }
     }
   };
 
   const selectedPerformance = useMemo(() => 
+    // Fix: Use camelCase property names
     performances.find(p => p.gameId === selectedGameId && p.playerId === selectedPlayerId),
     [performances, selectedGameId, selectedPlayerId]
   );
@@ -230,7 +273,7 @@ const App: React.FC = () => {
     if (!selectedPerformance) return [];
     if (!metricFilter) return selectedPerformance.analysis.events;
 
-    return selectedPerformance.analysis.events.filter(e => {
+    return selectedPerformance.analysis.events.filter((e: any) => {
       const type = e.type.toLowerCase();
       switch (metricFilter) {
         case 'goals': return type.includes('goal');
@@ -278,6 +321,7 @@ const App: React.FC = () => {
           <div className="col-span-full py-20 text-center text-slate-500 italic">Nenhum atleta cadastrado.</div>
         ) : players.map(player => {
           const playerGameId = rosterGameSelection[player.id] || "";
+          // Fix: Use camelCase property names
           const hasPerformance = performances.some(p => p.playerId === player.id && p.gameId === playerGameId);
 
           return (
@@ -332,7 +376,8 @@ const App: React.FC = () => {
   );
 
   const renderAnalytics = () => {
-    const sortedGames = [...games].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const sortedGames = [...games];
+    // Fix: Use camelCase property names in performance filter
     const playersInSelectedGame = players.filter(pl => performances.some(p => p.gameId === selectedGameId && p.playerId === pl.id));
 
     return (
